@@ -3,10 +3,10 @@
 
 pip install agent-framework-devui --pre
 
-foundry-local-sdk
+pip install foundry-local-sdk
 
-agent-framework
+pip install agent-framework
 
-aiohttp
+pip install aiohttp
 
 
