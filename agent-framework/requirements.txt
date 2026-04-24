@@ -1,0 +1,5 @@
+azure-identity>=1.18.0
+azure-core>=1.31.0
+pydantic>=2.0.0
+agent-framework>=1.0.0
+foundry-local-sdk>=1.0.0
