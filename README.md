@@ -33,6 +33,9 @@ Medical information is highly sensitive and requires careful handling to ensure 
 - **Azure Red Hat OpenShift**: A cloud-based platform for deploying and managing containerized applications.
 - **Microshift**: A lightweight Kubernetes distribution for edge computing and IoT applications.
 
+### Sample Data
+- **Patientengespräch**: https://www.youtube.com/watch?v=bhEmB1NTUpk
+
 
 
 
