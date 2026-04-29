@@ -3,14 +3,15 @@
 #
 # What this script does:
 #   1. Checks prerequisites (Python venv, Node, foundry-local-sdk).
-#   2. Pre-downloads the edge models (whisper-large-v3-turbo, phi-4)
-#      via foundry-local-sdk so the first backend request is instant.
-#      Models are cached in ~/.foundry-local and are only downloaded once.
+#   2. Pre-downloads the SLM (phi-4-mini) via foundry-local-sdk.
+#      Whisper is handled by faster-whisper (downloads from Hugging Face on
+#      first use; cached in ~/.cache/huggingface/).
 #   3. Starts the FastAPI backend (port 8000) and Next.js dev server (port 3000).
 #   4. Opens the browser.
 #
-# The Foundry Local SDK runs inference IN-PROCESS inside the Python backend —
-# there is no separate service to start.
+# The Foundry Local SDK handles phi-4-mini inference IN-PROCESS inside the
+# Python backend. Whisper transcription runs via faster-whisper (also
+# in-process). Neither requires a separate service.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -46,12 +47,19 @@ if ! "$PYTHON_BIN" -c "import foundry_local_sdk" 2>/dev/null; then
 fi
 
 # ── Foundry Local model pre-download ─────────────────────────────────────────
-# The foundry-local-sdk handles download + inference in-process (no separate
-# service needed). We pre-warm both models here so the first demo request is
-# instant rather than blocking for several minutes on a cold download.
-info "Pre-warming edge models via foundry-local-sdk (cached after first run)..."
+# Pre-warm only the SLM (phi-4-mini) via foundry-local-sdk.
+# Whisper is skipped when TRANSCRIPTION_BACKEND=faster-whisper (the default) —
+# faster-whisper downloads its own model from Hugging Face on first use.
+TRANSCRIPTION_BACKEND="${TRANSCRIPTION_BACKEND:-faster-whisper}"
+if [ "$TRANSCRIPTION_BACKEND" = "faster-whisper" ]; then
+  info "Transcription backend: faster-whisper (Foundry whisper model will NOT be pre-warmed)"
+else
+  info "Transcription backend: foundry"
+fi
+
+info "Pre-warming edge SLM via foundry-local-sdk (cached after first run)..."
 if ! "$PYTHON_BIN" - <<'PYEOF'
-import sys
+import sys, os
 import yaml
 from pathlib import Path
 
@@ -62,15 +70,20 @@ except ImportError:
   sys.exit(1)
 
 cfg = yaml.safe_load(Path("models.yaml").read_text())
-whisper = cfg["edge"]["transcription"]["model"]
-slm     = cfg["edge"]["slm"]["model"]
+slm = cfg["edge"]["slm"]["model"]
+
+# Only include whisper when using the foundry backend
+backend = os.environ.get("TRANSCRIPTION_BACKEND", "faster-whisper").lower()
+models_to_warm = [slm]
+if backend != "faster-whisper":
+    models_to_warm.insert(0, cfg["edge"]["transcription"]["model"])
 
 if FoundryLocalManager.instance is None:
     FoundryLocalManager.initialize(Configuration(app_name="hybrid_demo"))
 manager = FoundryLocalManager.instance
 manager.download_and_register_eps()
 
-for model_id in (whisper, slm):
+for model_id in models_to_warm:
     print(f"[demo]   checking {model_id}...", flush=True)
     model = manager.catalog.get_model(model_id)
     if model is None:

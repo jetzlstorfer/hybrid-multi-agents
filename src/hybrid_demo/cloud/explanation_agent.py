@@ -51,11 +51,12 @@ async def explain(state: WorkflowState) -> Explanation:
         )
         result = await agent.run(cloud_result.model_dump_json())
         text = str(result)
+        # Use raw_decode so trailing prose after the JSON object is ignored.
+        decoder = json.JSONDecoder()
         start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1:
+        if start == -1:
             raise ValueError("No JSON object in cloud response")
-        parsed = json.loads(text[start : end + 1])
+        parsed, _ = decoder.raw_decode(text, start)
 
         return Explanation(
             workflow_id=state.workflow_id,

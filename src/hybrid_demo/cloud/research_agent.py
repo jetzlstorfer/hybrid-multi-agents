@@ -65,12 +65,12 @@ async def research(state: WorkflowState) -> CloudResult:
         )
         result = await agent.run(handover.model_dump_json())
         text = str(result)
-        # Best effort to find the JSON block.
+        # Use raw_decode so trailing prose after the JSON object is ignored.
+        decoder = json.JSONDecoder()
         start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1:
+        if start == -1:
             raise ValueError("No JSON object in cloud response")
-        parsed = json.loads(text[start : end + 1])
+        parsed, _ = decoder.raw_decode(text, start)
 
         return CloudResult(
             workflow_id=state.workflow_id,

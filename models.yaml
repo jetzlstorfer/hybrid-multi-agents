@@ -9,8 +9,11 @@
 #
 edge:
   transcription:
-    provider: foundry-local
-    model: whisper-large-v3-turbo
+    # Backend selected by TRANSCRIPTION_BACKEND env var:
+    #   faster-whisper  (default) — runs locally, handles long audio via chunking+VAD
+    #   foundry         — uses Foundry Local SDK (Windows/macOS only, ~30 s context window)
+    provider: faster-whisper
+    model: small          # FASTER_WHISPER_MODEL overrides this at runtime
     options:
       language: de
   slm:

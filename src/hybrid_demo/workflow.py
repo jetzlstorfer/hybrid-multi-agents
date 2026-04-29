@@ -113,8 +113,17 @@ async def run_workflow(
     # Increase via HYBRID_DEMO_EDGE_TIMEOUT_SECONDS if needed (default 300s).
     edge_stage_timeout = float(os.environ.get(
         "HYBRID_DEMO_EDGE_TIMEOUT_SECONDS", "300"))
+    # PII/entity extraction can be the slowest local SLM stage for long
+    # transcripts. Allow a dedicated timeout override for this stage.
+    pii_stage_timeout = float(os.environ.get(
+        "HYBRID_DEMO_PII_TIMEOUT_SECONDS", "600"))
     cloud_stage_timeout = float(os.environ.get(
         "HYBRID_DEMO_CLOUD_TIMEOUT_SECONDS", "180"))
+    # Transcription can take much longer than SLM stages for long audio files.
+    # Default 900s to handle ~16-min files on CPU with the small model.
+    # Override with HYBRID_DEMO_TRANSCRIPTION_TIMEOUT_SECONDS.
+    transcription_timeout = float(os.environ.get(
+        "HYBRID_DEMO_TRANSCRIPTION_TIMEOUT_SECONDS", "900"))
     """Run the full pipeline and yield stage events as they complete."""
     workflow_id = workflow_id or f"wf_{uuid.uuid4().hex[:8]}"
     state = WorkflowState(
@@ -143,7 +152,7 @@ async def run_workflow(
                 state.transcript = await _run_stage_with_timeout(
                     transcribe,
                     state,
-                    timeout_seconds=edge_stage_timeout,
+                    timeout_seconds=transcription_timeout,
                     stage_name="transcript",
                 )
             yield StageEvent("transcript", state.transcript.model_dump())
@@ -153,7 +162,7 @@ async def run_workflow(
             state.sensitivity = await _run_stage_with_timeout(
                 detect_pii,
                 state,
-                timeout_seconds=edge_stage_timeout,
+                timeout_seconds=pii_stage_timeout,
                 stage_name="entities",
             )
             yield StageEvent("entities", state.sensitivity.model_dump())

@@ -98,10 +98,83 @@ def _normalise_str_list(value: Any) -> list[str]:
     return _as_list_of_str(value)
 
 
+def _strip_markdown_fences(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
+def _chunk_text(text: str, max_chars: int) -> list[str]:
+    """Split *text* into chunks on sentence boundaries."""
+    if len(text) <= max_chars:
+        return [text]
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > max_chars:
+        cut = remaining.rfind(". ", 0, max_chars)
+        if cut == -1:
+            cut = remaining.rfind(" ", 0, max_chars)
+        if cut == -1:
+            cut = max_chars
+        else:
+            cut += 1
+        chunks.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
+
+def _merge_parsed(results: list[dict]) -> dict:
+    """Merge multiple per-chunk summary dicts into one coherent result.
+
+    The first non-null value wins for scalar fields; list fields are unioned.
+    """
+    merged: dict = {}
+    for result in results:
+        # Scalar: patient_context
+        if not merged.get("patient_context"):
+            ctx = result.get("patient_context") or {}
+            if any(v for v in ctx.values()):
+                merged["patient_context"] = ctx
+
+        # Scalar: chief_complaint — first non-null wins
+        if not merged.get("chief_complaint"):
+            merged["chief_complaint"] = result.get("chief_complaint")
+
+        # Lists: accumulate
+        for key in ("symptoms", "known_medications", "known_conditions",
+                    "negative_findings", "uncertainties"):
+            existing = merged.get(key, []) or []
+            incoming = result.get(key) or []
+            merged[key] = existing + incoming
+
+    return merged
+
+
 def _slm_summary(redacted_text: str) -> dict:
+    import os
     from .. import runtime
 
+    chunk_size = int(os.environ.get("HYBRID_DEMO_PII_CHUNK_CHARS", "3000"))
+    chunks = _chunk_text(redacted_text, chunk_size)
+
     client = runtime.get_local_chat_client()
+    results: list[dict] = []
+    for chunk in chunks:
+        results.append(_slm_summary_chunk(client, chunk))
+
+    if len(results) == 1:
+        return results[0]
+    return _merge_parsed(results)
+
+
+def _slm_summary_chunk(client: object, redacted_text: str) -> dict:
     messages = [
         {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
         {"role": "user", "content": redacted_text},
@@ -115,7 +188,9 @@ def _slm_summary(redacted_text: str) -> dict:
             temperature=0.1,
         )
 
-    raw = (response.choices[0].message.content or "{}").strip()
+    raw = _strip_markdown_fences(
+        response.choices[0].message.content or "{}"
+    ).strip()
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
