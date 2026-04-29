@@ -1,0 +1,76 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hybrid-demo-foundry-local
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: hybrid-demo
+  source:
+    repoURL: https://github.com/hybrid-multi-agents/hybrid-multi-agents.git
+    targetRevision: HEAD
+    path: gitops/base/foundry-local
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hybrid-demo
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: [CreateNamespace=true]
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hybrid-demo-otel
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  project: hybrid-demo
+  source:
+    repoURL: https://github.com/hybrid-multi-agents/hybrid-multi-agents.git
+    targetRevision: HEAD
+    path: gitops/base/otel-collector
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hybrid-demo
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hybrid-demo-backend
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  project: hybrid-demo
+  source:
+    repoURL: https://github.com/hybrid-multi-agents/hybrid-multi-agents.git
+    targetRevision: HEAD
+    path: gitops/overlays/microshift-edge
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: hybrid-demo
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hybrid-demo-project
+  namespace: openshift-gitops
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hybrid-multi-agents/hybrid-multi-agents.git
+    targetRevision: HEAD
+    path: gitops/argocd/projects
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-gitops
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }

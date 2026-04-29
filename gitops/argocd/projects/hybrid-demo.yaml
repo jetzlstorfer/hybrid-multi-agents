@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: hybrid-demo
+  namespace: openshift-gitops
+spec:
+  description: Hybrid multi-agent demo
+  sourceRepos:
+    - https://github.com/hybrid-multi-agents/hybrid-multi-agents.git
+  destinations:
+    - namespace: hybrid-demo
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

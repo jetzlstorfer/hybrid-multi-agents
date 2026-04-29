@@ -1,0 +1,25 @@
+# Argo CD Application that itself manages a folder of child Applications
+# (app-of-apps pattern). Apply this once to bootstrap the whole demo:
+#
+#   oc apply -f gitops/argocd/app-of-apps.yaml
+#
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: hybrid-demo-bootstrap
+  namespace: openshift-gitops
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/hybrid-multi-agents/hybrid-multi-agents.git
+    targetRevision: HEAD
+    path: gitops/argocd/apps
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-gitops
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions:
+      - CreateNamespace=true
