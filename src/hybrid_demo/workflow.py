@@ -25,6 +25,8 @@ from .cloud.research_agent import research
 from .contracts import (
     HandoverPackage,
     PolicyDecision,
+    Transcript,
+    TranscriptSegment,
     WorkflowState,
 )
 from .edge.pii_agent import detect_pii

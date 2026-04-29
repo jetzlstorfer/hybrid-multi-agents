@@ -181,7 +181,7 @@ def _local_model_cache_statuses() -> list[dict]:
 async def _drive_workflow(
     workflow_id: str,
     audio_uri: str | None,
-        transcript_text: str | None,
+    transcript_text: str | None,
     language_hint: str | None,
     force_violation: bool,
 ) -> None:
@@ -206,7 +206,7 @@ async def _drive_workflow(
 async def run(
     background_tasks: BackgroundTasks,
     audio: UploadFile | None = None,
-        transcript: str = Form(""),
+    transcript: str = Form(""),
     language_hint: str = Form("de-AT"),
     force_violation: bool = Form(False),
 ) -> JSONResponse:
@@ -274,11 +274,18 @@ async def agui(payload: dict | None = None) -> EventSourceResponse:
     _queues[workflow_id] = asyncio.Queue()
 
     audio_uri = payload.get("audio_uri")
+    transcript_text = payload.get("transcript")
     language_hint = payload.get("language_hint", "de-AT")
     force_violation = bool(payload.get("force_violation", False))
 
     asyncio.create_task(
-        _drive_workflow(workflow_id, audio_uri, language_hint, force_violation)
+        _drive_workflow(
+            workflow_id=workflow_id,
+            audio_uri=audio_uri,
+            transcript_text=transcript_text,
+            language_hint=language_hint,
+            force_violation=force_violation,
+        )
     )
 
     async def _agui_stream() -> AsyncIterator[dict]:
