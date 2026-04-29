@@ -15,7 +15,7 @@ edge:
       language: de
   slm:
     provider: foundry-local
-    model: phi-4
+    model: phi-4-mini
     options:
       temperature: 0.1
       max_tokens: 256

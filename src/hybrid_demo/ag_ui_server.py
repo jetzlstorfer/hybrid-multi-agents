@@ -70,9 +70,11 @@ async def api_status() -> JSONResponse:
     """Report edge model cache state. Used by the status page in the web UI."""
     models = _local_model_cache_statuses()
     model_statuses = {m["status"] for m in models}
-    sdk_ok = bool(models) and all(s in {"loaded", "cached", "not_cached"} for s in model_statuses)
+    sdk_ok = bool(models) and all(
+        s in {"loaded", "cached", "not_cached"} for s in model_statuses)
     sdk_missing = "sdk_missing" in model_statuses
-    overall = "ok" if sdk_ok else ("not_configured" if sdk_missing else "degraded")
+    overall = "ok" if sdk_ok else (
+        "not_configured" if sdk_missing else "degraded")
     return JSONResponse({"overall": overall, "models": models})
 
 
@@ -102,7 +104,8 @@ def _local_model_cache_statuses() -> list[dict]:
 
     try:
         if FoundryLocalManager.instance is None:
-            FoundryLocalManager.initialize(Configuration(app_name="hybrid_demo"))
+            FoundryLocalManager.initialize(
+                Configuration(app_name="hybrid_demo"))
         manager = FoundryLocalManager.instance
     except Exception as exc:
         return [
@@ -126,9 +129,12 @@ def _local_model_cache_statuses() -> list[dict]:
             model = manager.catalog.get_model(spec.model)
             cached_attr = getattr(model, "is_cached", False)
             loaded_attr = getattr(model, "is_loaded", False)
-            is_cached = bool(cached_attr() if callable(cached_attr) else cached_attr)
-            is_loaded = bool(loaded_attr() if callable(loaded_attr) else loaded_attr)
-            status = "loaded" if is_loaded else ("cached" if is_cached else "not_cached")
+            is_cached = bool(cached_attr() if callable(
+                cached_attr) else cached_attr)
+            is_loaded = bool(loaded_attr() if callable(
+                loaded_attr) else loaded_attr)
+            status = "loaded" if is_loaded else (
+                "cached" if is_cached else "not_cached")
             path = None
             if is_cached:
                 try:
@@ -175,6 +181,7 @@ def _local_model_cache_statuses() -> list[dict]:
 async def _drive_workflow(
     workflow_id: str,
     audio_uri: str | None,
+        transcript_text: str | None,
     language_hint: str | None,
     force_violation: bool,
 ) -> None:
@@ -182,6 +189,7 @@ async def _drive_workflow(
     try:
         async for event in run_workflow(
             audio_uri=audio_uri,
+            transcript_text=transcript_text,
             language_hint=language_hint,
             force_violation=force_violation,
             workflow_id=workflow_id,
@@ -198,6 +206,7 @@ async def _drive_workflow(
 async def run(
     background_tasks: BackgroundTasks,
     audio: UploadFile | None = None,
+        transcript: str = Form(""),
     language_hint: str = Form("de-AT"),
     force_violation: bool = Form(False),
 ) -> JSONResponse:
@@ -205,7 +214,11 @@ async def run(
     _queues[workflow_id] = asyncio.Queue()
 
     audio_uri: str | None = None
-    if audio is not None and audio.filename:
+    transcript_text: str | None = None
+
+    if transcript and transcript.strip():
+        transcript_text = transcript.strip()
+    elif audio is not None and audio.filename:
         path = f"/tmp/{workflow_id}_{audio.filename}"
         with open(path, "wb") as fh:
             fh.write(await audio.read())
@@ -213,11 +226,11 @@ async def run(
     else:
         return JSONResponse(
             status_code=400,
-            content={"error": "audio file is required"},
+            content={"error": "Either an audio file or a transcript is required"},
         )
 
     background_tasks.add_task(
-        _drive_workflow, workflow_id, audio_uri, language_hint, force_violation
+        _drive_workflow, workflow_id, audio_uri, transcript_text, language_hint, force_violation
     )
     return JSONResponse({"workflow_id": workflow_id})
 

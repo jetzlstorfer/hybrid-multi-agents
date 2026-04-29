@@ -9,19 +9,24 @@ export default function Home() {
   const [running, setRunning] = useState(false);
   const [workflowId, setWorkflowId] = useState<string | null>(null);
 
-  async function runWorkflow(opts: { audio: File | null; forceViolation: boolean }) {
+  async function runWorkflow(opts: { audio: File | null; transcript: string; forceViolation: boolean }) {
     setEvents({});
     setRunning(true);
     setWorkflowId(null);
 
-    if (!opts.audio) {
+    if (!opts.audio && !opts.transcript.trim()) {
       setRunning(false);
-      setEvents({ error: { stage: 'error', payload: { message: 'Please select an audio file first.' } } });
+      setEvents({ error: { stage: 'error', payload: { message: 'Please select an audio file or paste a transcript.' } } });
       return;
     }
 
     const form = new FormData();
-    form.append('audio', opts.audio);
+    if (opts.audio) {
+      form.append('audio', opts.audio);
+    }
+    if (opts.transcript.trim()) {
+      form.append('transcript', opts.transcript.trim());
+    }
     form.append('force_violation', String(opts.forceViolation));
     form.append('language_hint', 'de-AT');
 
@@ -37,6 +42,7 @@ export default function Home() {
 
     const es = new EventSource(`/api/events/${workflow_id}`);
     const stages = [
+      'progress',
       'transcript',
       'entities',
       'redacted',

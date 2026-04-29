@@ -48,6 +48,7 @@ EntityType = Literal[
     "FREE_TEXT_IDENTIFIER",
 ]
 
+
 class Entity(BaseModel):
     type: EntityType
     value: str
@@ -105,7 +106,8 @@ class ConditionCategory(BaseModel):
 
 class CloudResult(BaseModel):
     workflow_id: str
-    possible_condition_categories: list[ConditionCategory] = Field(default_factory=list)
+    possible_condition_categories: list[ConditionCategory] = Field(
+        default_factory=list)
     recommended_follow_up_questions: list[str] = Field(default_factory=list)
     red_flags: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
@@ -149,6 +151,7 @@ class WorkflowState(BaseModel):
     workflow_id: str
     audio_uri: str | None = None
     language_hint: str | None = None
+    transcript_text: str | None = None
     transcript: Transcript | None = None
     sensitivity: SensitivityReport | None = None
     redacted: RedactedTranscript | None = None

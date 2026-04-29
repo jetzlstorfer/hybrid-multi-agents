@@ -8,6 +8,7 @@ re-introduction of identifiers.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from ..contracts import (
     HandoverPackage,
@@ -49,6 +50,54 @@ Schema:
 """
 
 
+def _as_str_or_none(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _as_list_of_str(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        text = _as_str_or_none(item)
+        if text is not None:
+            out.append(text)
+    return out
+
+
+def _normalise_symptoms(value: Any) -> list[Symptom]:
+    if not isinstance(value, list):
+        return []
+
+    out: list[Symptom] = []
+    for raw_item in value:
+        if not isinstance(raw_item, dict):
+            continue
+
+        name = _as_str_or_none(raw_item.get("name"))
+        if name is None:
+            # Ignore malformed symptom items instead of failing the full stage.
+            continue
+
+        out.append(
+            Symptom(
+                name=name,
+                duration=_as_str_or_none(raw_item.get("duration")),
+                severity=_as_str_or_none(raw_item.get("severity")),
+                associated_symptoms=_as_list_of_str(
+                    raw_item.get("associated_symptoms")),
+            )
+        )
+    return out
+
+
+def _normalise_str_list(value: Any) -> list[str]:
+    return _as_list_of_str(value)
+
+
 def _slm_summary(redacted_text: str) -> dict:
     from .. import runtime
 
@@ -82,7 +131,11 @@ def _slm_summary(redacted_text: str) -> dict:
         start = raw.find("{")
         if start == -1:
             raise
-        parsed, _ = json.JSONDecoder().raw_decode(raw[start:])
+        try:
+            parsed, _ = json.JSONDecoder().raw_decode(raw[start:])
+        except json.JSONDecodeError as exc:
+            raise json.JSONDecodeError(
+                "Expected JSON object", raw, start) from exc
         if isinstance(parsed, dict):
             return parsed
         raise json.JSONDecodeError("Expected JSON object", raw, start)
@@ -102,12 +155,16 @@ def summarise(state: WorkflowState) -> HandoverPackage:
 
     return HandoverPackage(
         workflow_id=state.workflow_id,
-        patient_context=PatientContext(**(parsed.get("patient_context") or {})),
-        chief_complaint=parsed.get("chief_complaint"),
-        symptoms=[Symptom(**s) for s in parsed.get("symptoms", [])],
-        known_medications=parsed.get("known_medications", []),
-        known_conditions=parsed.get("known_conditions", []),
-        negative_findings=parsed.get("negative_findings", []),
-        uncertainties=parsed.get("uncertainties", []),
+        patient_context=PatientContext(
+            **(parsed.get("patient_context") or {})),
+        chief_complaint=_as_str_or_none(parsed.get("chief_complaint")),
+        symptoms=_normalise_symptoms(parsed.get("symptoms", [])),
+        known_medications=_normalise_str_list(
+            parsed.get("known_medications", [])),
+        known_conditions=_normalise_str_list(
+            parsed.get("known_conditions", [])),
+        negative_findings=_normalise_str_list(
+            parsed.get("negative_findings", [])),
+        uncertainties=_normalise_str_list(parsed.get("uncertainties", [])),
         forbidden_fields_removed=True,
     )

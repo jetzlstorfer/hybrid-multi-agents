@@ -101,7 +101,7 @@ def _parse_llm_json(raw: str) -> dict:
         end = raw.rfind("}")
         if start == -1 or end == -1 or end <= start:
             raise
-        return json.loads(raw[start : end + 1])
+        return json.loads(raw[start: end + 1])
 
 
 def _complete_chat_raw(client: object, messages: list[dict[str, str]]) -> str:
@@ -158,6 +158,7 @@ def _extract_entities(payload: dict, source_text: str) -> list[Entity]:
 
 
 def _slm_entities(text: str) -> list[Entity]:
+    import os
     from .. import runtime
 
     client = runtime.get_local_chat_client()
@@ -170,28 +171,32 @@ def _slm_entities(text: str) -> list[Entity]:
     entities = _extract_entities(parsed, text)
 
     # Second pass: ask for missing entities only to improve recall.
-    audit_messages = [
-        {"role": "system", "content": _PII_AUDIT_PROMPT},
-        {
-            "role": "user",
-            "content": (
-                "TRANSKRIPT:\n"
-                + text
-                + "\n\nBISHERIGE_ENTITAETEN_JSON:\n"
-                + json.dumps(
-                    {
-                        "entities": [
-                            {"type": ent.type, "value": ent.value}
-                            for ent in entities
-                        ]
-                    },
-                    ensure_ascii=False,
-                )
-            ),
-        },
-    ]
-    audit_parsed = _complete_chat_json(client, audit_messages)
-    entities.extend(_extract_entities(audit_parsed, text))
+    # Can be skipped via HYBRID_DEMO_SKIP_PII_AUDIT=1 to speed up the demo.
+    skip_audit = os.environ.get(
+        "HYBRID_DEMO_SKIP_PII_AUDIT", "").lower() in ("1", "true", "yes")
+    if not skip_audit:
+        audit_messages = [
+            {"role": "system", "content": _PII_AUDIT_PROMPT},
+            {
+                "role": "user",
+                "content": (
+                    "TRANSKRIPT:\n"
+                    + text
+                    + "\n\nBISHERIGE_ENTITAETEN_JSON:\n"
+                    + json.dumps(
+                        {
+                            "entities": [
+                                {"type": ent.type, "value": ent.value}
+                                for ent in entities
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                ),
+            },
+        ]
+        audit_parsed = _complete_chat_json(client, audit_messages)
+        entities.extend(_extract_entities(audit_parsed, text))
     return _dedupe(entities)
 
 

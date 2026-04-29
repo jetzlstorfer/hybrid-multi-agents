@@ -30,6 +30,12 @@ interface ErrorStagePayload {
   message?: string;
 }
 
+interface ProgressStagePayload {
+  stage?: string;
+  message?: string;
+  runtime?: 'edge' | 'cloud' | 'gate';
+}
+
 interface PolicyGateStagePayload {
   cloud_allowed?: boolean;
   violations?: string[];
@@ -53,6 +59,7 @@ const STAGE_META: { key: string; label: string; runtime: 'edge' | 'cloud' | 'gat
 export function StagePanels({ events }: Props) {
   return (
     <div className="space-y-4">
+      {events.progress && <ProgressPanel payload={events.progress.payload} />}
       {STAGE_META.map((stage) => (
         <Panel key={stage.key} stage={stage} event={events[stage.key]} />
       ))}
@@ -158,13 +165,12 @@ function EntitiesBody({ payload }: { payload: unknown }) {
         <span
           key={`${e.type}-${e.value}`}
           title={`${e.type}`}
-          className={`rounded px-2 py-1 text-xs ${
-            highRiskTypes.has(e.type)
+          className={`rounded px-2 py-1 text-xs ${highRiskTypes.has(e.type)
               ? 'bg-block/40'
               : clinicalTypes.has(e.type)
                 ? 'bg-ok/30'
                 : 'bg-amber-700/40'
-          }`}
+            }`}
         >
           {e.type}: {e.value}
         </span>
@@ -216,6 +222,22 @@ function BlockedPanel({ payload }: { payload: unknown }) {
           <li key={i}>{v}</li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+function ProgressPanel({ payload }: { payload: unknown }) {
+  const progress = payload as ProgressStagePayload;
+  return (
+    <section className="rounded-lg border-2 border-amber-500 bg-amber-500/10 p-4">
+      <h2 className="text-lg font-bold text-amber-300">Pipeline in progress</h2>
+      <p className="mt-1 text-sm text-amber-100">{progress.message ?? 'Processing next stage...'}</p>
+      {progress.stage ? (
+        <p className="mt-1 text-xs uppercase tracking-wide text-amber-200">
+          current stage: {progress.stage}
+          {progress.runtime ? ` · ${progress.runtime}` : ''}
+        </p>
+      ) : null}
     </section>
   );
 }

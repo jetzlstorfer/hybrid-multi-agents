@@ -26,6 +26,8 @@ info()    { echo -e "${GREEN}[demo]${NC} $*"; }
 warn()    { echo -e "${YELLOW}[demo]${NC} $*"; }
 die()     { echo -e "${RED}[demo] ERROR:${NC} $*" >&2; exit 1; }
 
+WEB_LOG="${WEB_LOG:-/tmp/hybrid-demo-web.log}"
+
 # ── .env ────────────────────────────────────────────────────────────────────
 if [ ! -f .env ]; then
   cp .env.example .env
@@ -82,6 +84,17 @@ then
 fi
 
 # ── Node check ───────────────────────────────────────────────────────────────
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+  die "Node.js/npm not found. Install Node 20 LTS (recommended) and retry."
+fi
+
+NODE_VERSION="$(node -v 2>/dev/null || true)"
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+if [ "${NODE_MAJOR:-0}" -ge 22 ]; then
+  warn "Detected Node $NODE_VERSION. This repo's Next.js dev server can exit immediately on Node 22 in some environments."
+  warn "If web startup fails below, switch to Node 20 LTS and re-run."
+fi
+
 if [ ! -d web/node_modules ]; then
   info "node_modules not found — running npm install..."
   (cd web && npm install --no-audit --no-fund)
@@ -124,10 +137,30 @@ if ! curl -sf http://localhost:8000/healthz &>/dev/null; then
 fi
 
 info "Starting web UI (http://localhost:3000)..."
-(cd web && npm run dev -- --port 3000) &
+WEB_PID=""
+rm -f "$WEB_LOG"
+(cd web && npm run dev -- --port 3000) >"$WEB_LOG" 2>&1 &
 WEB_PID=$!
+
+for i in $(seq 1 40); do
+  if curl -sf http://localhost:3000 >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$WEB_PID" 2>/dev/null; then
+    warn "Web process exited during startup. Last log lines:"
+    tail -n 80 "$WEB_LOG" || true
+    die "Web UI failed to start. Current Node: ${NODE_VERSION:-unknown}. Try Node 20 LTS."
+  fi
+  sleep 0.5
+done
+
+if ! curl -sf http://localhost:3000 >/dev/null 2>&1; then
+  warn "Web process did not become ready on :3000. Last log lines:"
+  tail -n 80 "$WEB_LOG" || true
+  die "Web UI not reachable at http://localhost:3000"
+fi
 
 info "Opening browser → http://localhost:3000"
 open http://localhost:3000 2>/dev/null || xdg-open http://localhost:3000 2>/dev/null || true
 info "Press Ctrl-C to stop."
-wait
+wait "$WEB_PID"
