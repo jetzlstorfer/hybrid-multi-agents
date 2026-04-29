@@ -126,17 +126,30 @@ def _chunk_text(text: str, max_chars: int) -> list[str]:
 
 
 def _redact_segment_with_slm(text: str, entities: list[Entity]) -> str:
-    """Delegate replacement behavior to the local SLM (fail-fast).
+    """Delegate replacement behavior to the local SLM.
 
     Long segments are split into chunks that fit within the model's context
     window before being sent to the SLM; results are rejoined afterwards.
+    If one chunk fails (for example with an SDK-side cancellation), that chunk
+    falls back to deterministic redaction so the workflow can continue.
     """
     import os
     chunk_size = int(os.environ.get("HYBRID_DEMO_PII_CHUNK_CHARS", "3000"))
     chunks = _chunk_text(text, chunk_size)
-    return " ".join(
-        _redact_chunk_with_slm(chunk, entities) for chunk in chunks
-    )
+    redacted_chunks: list[str] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        try:
+            redacted_chunks.append(_redact_chunk_with_slm(chunk, entities))
+        except Exception as exc:
+            _log.warning(
+                "Redaction agent: SLM call failed for chunk %s/%s; using deterministic fallback. Error: %s",
+                idx,
+                len(chunks),
+                exc,
+            )
+            redacted_chunks.append(
+                _redact_chunk_deterministic(chunk, entities))
+    return " ".join(redacted_chunks)
 
 
 def _redact_chunk_with_slm(text: str, entities: list[Entity]) -> str:
