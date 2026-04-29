@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 from .. import policy, vault
 from ..contracts import (
@@ -49,6 +50,8 @@ _LLM_TRANSFORM_ACTIONS: dict[str, str] = {
     "LOCATION": "generalize_region",
     "EMPLOYER": "generalize_employer",
 }
+
+_GERMAN_HONORIFICS = ("Herr", "Herrn", "Frau")
 
 
 def _split_name(full_name: str) -> tuple[str | None, str | None]:
@@ -191,6 +194,52 @@ def _redact_chunk_with_slm(text: str, entities: list[Entity]) -> str:
     if not out:
         out = _redact_chunk_deterministic(text, entities)
 
+    # Enforce direct-identifier redaction even when the SLM misses specific
+    # mentions (e.g. surname-only references like "Herr Gerster").
+    return _enforce_direct_identifier_redaction(out, entities)
+
+
+def _enforce_direct_identifier_redaction(text: str, entities: list[Entity]) -> str:
+    out = _redact_chunk_deterministic(text, entities)
+    return _enforce_person_name_mentions(out, entities)
+
+
+def _enforce_person_name_mentions(text: str, entities: list[Entity]) -> str:
+    out = text
+    for ent in entities:
+        if ent.type != "PERSON_NAME" or not ent.value:
+            continue
+
+        first, last = _split_name(ent.value)
+
+        # Redact explicit title+surname references while preserving the title
+        # token and casing from the source text.
+        if last:
+            title_pattern = re.compile(
+                rf"\b({'|'.join(_GERMAN_HONORIFICS)})\s+{re.escape(last)}\b",
+                flags=re.IGNORECASE,
+            )
+            out = title_pattern.sub(r"\1 [PATIENT_LAST_NAME]", out)
+
+        # Redact standalone surname/first-name mentions.
+        if last:
+            out = re.sub(
+                rf"\b{re.escape(last)}\b",
+                "[PATIENT_LAST_NAME]",
+                out,
+                flags=re.IGNORECASE,
+            )
+        if first:
+            first_replacement = "[PATIENT_FIRST_NAME]"
+            if not last:
+                first_replacement = _replacement_for_entity(ent)
+            out = re.sub(
+                rf"\b{re.escape(first)}\b",
+                first_replacement,
+                out,
+                flags=re.IGNORECASE,
+            )
+
     return out
 
 
@@ -248,7 +297,10 @@ def redact(state: WorkflowState) -> RedactedTranscript:
     redacted_segments = [
         TranscriptSegment(
             speaker=seg.speaker,
-            text=_redact_segment_with_slm(seg.text, sensitivity.entities),
+            text=_enforce_direct_identifier_redaction(
+                _redact_segment_with_slm(seg.text, sensitivity.entities),
+                sensitivity.entities,
+            ),
         )
         for seg in transcript.segments
     ]

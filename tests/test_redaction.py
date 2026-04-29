@@ -111,7 +111,6 @@ def test_redacts_repeated_name_mentions_and_keeps_timestamp_context(monkeypatch)
     def fake_slm(segment: str, _entities: list[Entity]) -> str:
         out = segment
         out = out.replace("Paul Gerster", "[PATIENT_FIRST_NAME] [PATIENT_LAST_NAME]")
-        out = out.replace("Herr Gerster", "[PATIENT_FIRST_NAME] [PATIENT_LAST_NAME]")
         return out
 
     import hybrid_demo.edge.redaction_agent as redaction_agent
@@ -123,6 +122,7 @@ def test_redacts_repeated_name_mentions_and_keeps_timestamp_context(monkeypatch)
 
     assert "Paul Gerster" not in redacted_text
     assert "Herr Gerster" not in redacted_text
-    assert redacted_text.count("[PATIENT_FIRST_NAME] [PATIENT_LAST_NAME]") >= 2
+    assert redacted_text.count("[PATIENT_FIRST_NAME]") >= 1
+    assert redacted_text.count("[PATIENT_LAST_NAME]") >= 2
     assert "Gestern gegen elf morgens" in redacted_text
     assert "[TIMESTAMP]" not in redacted_text
