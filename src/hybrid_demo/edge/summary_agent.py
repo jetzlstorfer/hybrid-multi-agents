@@ -161,7 +161,11 @@ def _slm_summary(redacted_text: str) -> dict:
     import os
     from .. import runtime
 
-    chunk_size = int(os.environ.get("HYBRID_DEMO_PII_CHUNK_CHARS", "3000"))
+    # Use a dedicated chunk size for the summary stage so it can be tuned
+    # independently of the PII stage.  The Foundry Local native library has a
+    # ~120 s per-request inference timeout; keeping chunks small ensures each
+    # call completes well within that window on CPU-only hardware.
+    chunk_size = int(os.environ.get("HYBRID_DEMO_SUMMARY_CHUNK_CHARS", "600"))
     chunks = _chunk_text(redacted_text, chunk_size)
 
     client = runtime.get_local_chat_client()
@@ -174,19 +178,41 @@ def _slm_summary(redacted_text: str) -> dict:
     return _merge_parsed(results)
 
 
-def _slm_summary_chunk(client: object, redacted_text: str) -> dict:
+def _slm_summary_chunk(client: object, redacted_text: str, *, _attempt: int = 1) -> dict:
+    """Call the local SLM for one chunk, retrying once on transient cancellation.
+
+    The Foundry Local native library enforces a ~120 s per-request timeout.
+    When the model is slow (cold start, CPU-only), it may cancel mid-flight
+    with "Operation was cancelled".  A single retry catches one-off blips
+    without masking genuine failures.
+    """
+    import logging
+    _chunk_log = logging.getLogger(__name__)
+
     messages = [
         {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
         {"role": "user", "content": redacted_text},
     ]
-    if hasattr(client, "complete_chat"):
-        response = client.complete_chat(messages=messages)
-    else:
-        response = client.complete(
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.1,
-        )
+    try:
+        if hasattr(client, "complete_chat"):
+            response = client.complete_chat(messages=messages)
+        else:
+            response = client.complete(
+                messages=messages,
+                response_format={"type": "json_object"},
+                temperature=0.1,
+            )
+    except Exception as exc:
+        # Retry once on transient "Operation was cancelled" from the native
+        # Foundry Local library (its internal ~120 s inference timeout).
+        cancelled = "cancelled" in str(
+            exc).lower() or "canceled" in str(exc).lower()
+        if cancelled and _attempt == 1:
+            _chunk_log.warning(
+                "Foundry Local cancelled chunk (attempt %d) — retrying: %s", _attempt, exc
+            )
+            return _slm_summary_chunk(client, redacted_text, _attempt=2)
+        raise
 
     raw = _strip_markdown_fences(
         response.choices[0].message.content or "{}"
