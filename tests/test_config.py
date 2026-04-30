@@ -12,7 +12,7 @@ from hybrid_demo import config
 def test_default_slm_is_phi4(monkeypatch):
     monkeypatch.delenv("HYBRID_DEMO__EDGE__SLM__MODEL", raising=False)
     config.reload()
-    assert config.get_model("edge.slm").model == "phi-4"
+    assert config.get_model("edge.slm").model == "phi-4-mini"
 
 
 def test_env_override_changes_model(monkeypatch):

@@ -8,6 +8,8 @@ local vault for edge-only rehydration.
 from __future__ import annotations
 
 import json
+import logging
+import re
 
 from .. import policy, vault
 from ..contracts import (
@@ -19,6 +21,8 @@ from ..contracts import (
     WorkflowState,
 )
 from ..telemetry import traced_step
+
+_log = logging.getLogger(__name__)
 
 
 _REDACTION_SYSTEM_PROMPT = """\
@@ -47,6 +51,8 @@ _LLM_TRANSFORM_ACTIONS: dict[str, str] = {
     "EMPLOYER": "generalize_employer",
 }
 
+_GERMAN_HONORIFICS = ("Herr", "Herrn", "Frau")
+
 
 def _split_name(full_name: str) -> tuple[str | None, str | None]:
     parts = [p for p in full_name.strip().split() if p]
@@ -69,19 +75,84 @@ def _replacement_for_entity(ent: Entity) -> str:
     return ent.placeholder or "[REDACTED]"
 
 
+def _strip_markdown_fences(raw: str) -> str:
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.splitlines()
+        lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
 def _parse_redaction_json(raw: str) -> dict:
+    stripped = _strip_markdown_fences(raw).strip()
+    if not stripped:
+        raise json.JSONDecodeError("Empty response", raw, 0)
+    decoder = json.JSONDecoder()
     try:
-        return json.loads(raw)
+        return decoder.decode(stripped)
     except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise
-        return json.loads(raw[start : end + 1])
+        pass
+    start = stripped.find("{")
+    if start == -1:
+        raise json.JSONDecodeError("No JSON object found", raw, 0)
+    obj, _ = decoder.raw_decode(stripped, start)
+    if isinstance(obj, dict):
+        return obj
+    raise json.JSONDecodeError("Could not parse JSON object", raw, start)
+
+
+def _chunk_text(text: str, max_chars: int) -> list[str]:
+    """Split *text* into chunks of at most *max_chars* on sentence boundaries."""
+    if len(text) <= max_chars:
+        return [text]
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > max_chars:
+        cut = remaining.rfind(". ", 0, max_chars)
+        if cut == -1:
+            cut = remaining.rfind(" ", 0, max_chars)
+        if cut == -1:
+            cut = max_chars
+        else:
+            cut += 1
+        chunks.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+    if remaining:
+        chunks.append(remaining)
+    return chunks
 
 
 def _redact_segment_with_slm(text: str, entities: list[Entity]) -> str:
-    """Delegate replacement behavior to the local SLM (fail-fast)."""
+    """Delegate replacement behavior to the local SLM.
+
+    Long segments are split into chunks that fit within the model's context
+    window before being sent to the SLM; results are rejoined afterwards.
+    If one chunk fails (for example with an SDK-side cancellation), that chunk
+    falls back to deterministic redaction so the workflow can continue.
+    """
+    import os
+    chunk_size = int(os.environ.get("HYBRID_DEMO_PII_CHUNK_CHARS", "3000"))
+    chunks = _chunk_text(text, chunk_size)
+    redacted_chunks: list[str] = []
+    for idx, chunk in enumerate(chunks, start=1):
+        try:
+            redacted_chunks.append(_redact_chunk_with_slm(chunk, entities))
+        except Exception as exc:
+            _log.warning(
+                "Redaction agent: SLM call failed for chunk %s/%s; using deterministic fallback. Error: %s",
+                idx,
+                len(chunks),
+                exc,
+            )
+            redacted_chunks.append(
+                _redact_chunk_deterministic(chunk, entities))
+    return " ".join(redacted_chunks)
+
+
+def _redact_chunk_with_slm(text: str, entities: list[Entity]) -> str:
     from .. import runtime
 
     replacements: list[dict[str, str]] = []
@@ -123,11 +194,82 @@ def _redact_segment_with_slm(text: str, entities: list[Entity]) -> str:
         )
 
     raw = response.choices[0].message.content or "{}"
-    parsed = _parse_redaction_json(raw)
-    out = str(parsed.get("redacted_text", "")).strip()
+    try:
+        parsed = _parse_redaction_json(raw)
+        out = str(parsed.get("redacted_text", "")).strip()
+    except json.JSONDecodeError:
+        _log.warning(
+            "Redaction agent: malformed SLM JSON; falling back to deterministic replacement. "
+            "Raw response prefix: %r",
+            raw[:200],
+        )
+        out = _redact_chunk_deterministic(text, entities)
     if not out:
-        raise ValueError("Redaction SLM returned empty redacted_text")
+        out = _redact_chunk_deterministic(text, entities)
 
+    # Enforce direct-identifier redaction even when the SLM misses specific
+    # mentions (e.g. surname-only references like "Herr Gerster").
+    return _enforce_direct_identifier_redaction(out, entities)
+
+
+def _enforce_direct_identifier_redaction(text: str, entities: list[Entity]) -> str:
+    out = _redact_chunk_deterministic(text, entities)
+    return _enforce_person_name_mentions(out, entities)
+
+
+def _enforce_person_name_mentions(text: str, entities: list[Entity]) -> str:
+    out = text
+    for ent in entities:
+        if ent.type != "PERSON_NAME" or not ent.value:
+            continue
+
+        first, last = _split_name(ent.value)
+
+        # Redact explicit title+surname references while preserving the title
+        # token and casing from the source text.
+        if last:
+            title_pattern = re.compile(
+                rf"\b({'|'.join(_GERMAN_HONORIFICS)})\s+{re.escape(last)}\b",
+                flags=re.IGNORECASE,
+            )
+            out = title_pattern.sub(r"\1 [PATIENT_LAST_NAME]", out)
+
+        # Redact standalone surname/first-name mentions.
+        if last:
+            out = re.sub(
+                rf"\b{re.escape(last)}\b",
+                "[PATIENT_LAST_NAME]",
+                out,
+                flags=re.IGNORECASE,
+            )
+        if first:
+            first_replacement = "[PATIENT_FIRST_NAME]"
+            if not last:
+                first_replacement = _replacement_for_entity(ent)
+            out = re.sub(
+                rf"\b{re.escape(first)}\b",
+                first_replacement,
+                out,
+                flags=re.IGNORECASE,
+            )
+
+    return out
+
+
+def _redact_chunk_deterministic(text: str, entities: list[Entity]) -> str:
+    """Fallback redaction if SLM output is malformed.
+
+    Applies exact-string replacements for cloud-forbidden entities only.
+    This is intentionally conservative and keeps the workflow progressing.
+    """
+    out = text
+    for ent in sorted(entities, key=lambda e: len(e.value), reverse=True):
+        if not ent.value:
+            continue
+        if ent.type in policy.CLOUD_ALLOWED_CLINICAL:
+            continue
+        replacement = _replacement_for_entity(ent)
+        out = out.replace(ent.value, replacement)
     return out
 
 
@@ -156,7 +298,8 @@ def _build_vault_mapping(entities: list[Entity]) -> dict[str, str]:
 )
 def redact(state: WorkflowState) -> RedactedTranscript:
     transcript: Transcript = state.transcript  # type: ignore[assignment]
-    sensitivity: SensitivityReport = state.sensitivity  # type: ignore[assignment]
+    # type: ignore[assignment]
+    sensitivity: SensitivityReport = state.sensitivity
 
     # Build the placeholder vault: only direct identifiers go in. Generalised
     # quasi-identifiers are not reversible, so they don't need a vault entry.
@@ -167,7 +310,10 @@ def redact(state: WorkflowState) -> RedactedTranscript:
     redacted_segments = [
         TranscriptSegment(
             speaker=seg.speaker,
-            text=_redact_segment_with_slm(seg.text, sensitivity.entities),
+            text=_enforce_direct_identifier_redaction(
+                _redact_segment_with_slm(seg.text, sensitivity.entities),
+                sensitivity.entities,
+            ),
         )
         for seg in transcript.segments
     ]

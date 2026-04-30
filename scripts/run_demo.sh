@@ -3,14 +3,15 @@
 #
 # What this script does:
 #   1. Checks prerequisites (Python venv, Node, foundry-local-sdk).
-#   2. Pre-downloads the edge models (whisper-large-v3-turbo, phi-4)
-#      via foundry-local-sdk so the first backend request is instant.
-#      Models are cached in ~/.foundry-local and are only downloaded once.
+#   2. Pre-downloads the SLM (phi-4-mini) via foundry-local-sdk.
+#      Whisper is handled by faster-whisper (downloads from Hugging Face on
+#      first use; cached in ~/.cache/huggingface/).
 #   3. Starts the FastAPI backend (port 8000) and Next.js dev server (port 3000).
 #   4. Opens the browser.
 #
-# The Foundry Local SDK runs inference IN-PROCESS inside the Python backend —
-# there is no separate service to start.
+# The Foundry Local SDK handles phi-4-mini inference IN-PROCESS inside the
+# Python backend. Whisper transcription runs via faster-whisper (also
+# in-process). Neither requires a separate service.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -25,6 +26,8 @@ RED='\033[0;31m'; YELLOW='\033[1;33m'; GREEN='\033[0;32m'; NC='\033[0m'
 info()    { echo -e "${GREEN}[demo]${NC} $*"; }
 warn()    { echo -e "${YELLOW}[demo]${NC} $*"; }
 die()     { echo -e "${RED}[demo] ERROR:${NC} $*" >&2; exit 1; }
+
+WEB_LOG="${WEB_LOG:-/tmp/hybrid-demo-web.log}"
 
 # ── .env ────────────────────────────────────────────────────────────────────
 if [ ! -f .env ]; then
@@ -44,12 +47,19 @@ if ! "$PYTHON_BIN" -c "import foundry_local_sdk" 2>/dev/null; then
 fi
 
 # ── Foundry Local model pre-download ─────────────────────────────────────────
-# The foundry-local-sdk handles download + inference in-process (no separate
-# service needed). We pre-warm both models here so the first demo request is
-# instant rather than blocking for several minutes on a cold download.
-info "Pre-warming edge models via foundry-local-sdk (cached after first run)..."
+# Pre-warm only the SLM (phi-4-mini) via foundry-local-sdk.
+# Whisper is skipped when TRANSCRIPTION_BACKEND=faster-whisper (the default) —
+# faster-whisper downloads its own model from Hugging Face on first use.
+TRANSCRIPTION_BACKEND="${TRANSCRIPTION_BACKEND:-faster-whisper}"
+if [ "$TRANSCRIPTION_BACKEND" = "faster-whisper" ]; then
+  info "Transcription backend: faster-whisper (Foundry whisper model will NOT be pre-warmed)"
+else
+  info "Transcription backend: foundry"
+fi
+
+info "Pre-warming edge SLM via foundry-local-sdk (cached after first run)..."
 if ! "$PYTHON_BIN" - <<'PYEOF'
-import sys
+import sys, os
 import yaml
 from pathlib import Path
 
@@ -60,15 +70,20 @@ except ImportError:
   sys.exit(1)
 
 cfg = yaml.safe_load(Path("models.yaml").read_text())
-whisper = cfg["edge"]["transcription"]["model"]
-slm     = cfg["edge"]["slm"]["model"]
+slm = cfg["edge"]["slm"]["model"]
+
+# Only include whisper when using the foundry backend
+backend = os.environ.get("TRANSCRIPTION_BACKEND", "faster-whisper").lower()
+models_to_warm = [slm]
+if backend != "faster-whisper":
+    models_to_warm.insert(0, cfg["edge"]["transcription"]["model"])
 
 if FoundryLocalManager.instance is None:
     FoundryLocalManager.initialize(Configuration(app_name="hybrid_demo"))
 manager = FoundryLocalManager.instance
 manager.download_and_register_eps()
 
-for model_id in (whisper, slm):
+for model_id in models_to_warm:
     print(f"[demo]   checking {model_id}...", flush=True)
     model = manager.catalog.get_model(model_id)
     if model is None:
@@ -82,6 +97,17 @@ then
 fi
 
 # ── Node check ───────────────────────────────────────────────────────────────
+if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+  die "Node.js/npm not found. Install Node 20 LTS (recommended) and retry."
+fi
+
+NODE_VERSION="$(node -v 2>/dev/null || true)"
+NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+if [ "${NODE_MAJOR:-0}" -ge 22 ]; then
+  warn "Detected Node $NODE_VERSION. This repo's Next.js dev server can exit immediately on Node 22 in some environments."
+  warn "If web startup fails below, switch to Node 20 LTS and re-run."
+fi
+
 if [ ! -d web/node_modules ]; then
   info "node_modules not found — running npm install..."
   (cd web && npm install --no-audit --no-fund)
@@ -124,10 +150,30 @@ if ! curl -sf http://localhost:8000/healthz &>/dev/null; then
 fi
 
 info "Starting web UI (http://localhost:3000)..."
-(cd web && npm run dev -- --port 3000) &
+WEB_PID=""
+rm -f "$WEB_LOG"
+(cd web && npm run dev -- --port 3000) >"$WEB_LOG" 2>&1 &
 WEB_PID=$!
+
+for i in $(seq 1 40); do
+  if curl -sf http://localhost:3000 >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$WEB_PID" 2>/dev/null; then
+    warn "Web process exited during startup. Last log lines:"
+    tail -n 80 "$WEB_LOG" || true
+    die "Web UI failed to start. Current Node: ${NODE_VERSION:-unknown}. Try Node 20 LTS."
+  fi
+  sleep 0.5
+done
+
+if ! curl -sf http://localhost:3000 >/dev/null 2>&1; then
+  warn "Web process did not become ready on :3000. Last log lines:"
+  tail -n 80 "$WEB_LOG" || true
+  die "Web UI not reachable at http://localhost:3000"
+fi
 
 info "Opening browser → http://localhost:3000"
 open http://localhost:3000 2>/dev/null || xdg-open http://localhost:3000 2>/dev/null || true
 info "Press Ctrl-C to stop."
-wait
+wait "$WEB_PID"

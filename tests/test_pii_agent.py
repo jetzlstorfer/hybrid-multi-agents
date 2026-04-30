@@ -1,0 +1,82 @@
+from __future__ import annotations
+
+from hybrid_demo.contracts import Entity, Transcript, TranscriptSegment, WorkflowState
+from hybrid_demo.edge.pii_agent import detect_pii
+
+
+def test_detect_pii_extracts_entities_without_runtime(monkeypatch):
+    state = WorkflowState(workflow_id="wf_test")
+    state.transcript = Transcript(
+        workflow_id="wf_test",
+        transcript_id="tr_test",
+        language="de",
+        segments=[
+            TranscriptSegment(
+                speaker="unknown",
+                text="Mein Name ist Anna Mueller und ich wohne in Wien.",
+            )
+        ],
+    )
+
+    monkeypatch.setattr(
+        "hybrid_demo.edge.pii_agent._slm_entities",
+        lambda text: [
+            Entity(
+                type="PERSON_NAME",
+                value="Anna Mueller",
+                placeholder="[PATIENT_FIRST_NAME] [PATIENT_LAST_NAME]",
+            ),
+            Entity(
+                type="LOCATION",
+                value="Wien",
+                placeholder="[LOCATION]",
+            ),
+        ],
+    )
+
+    out = detect_pii(state)
+    assert len(out.entities) == 2
+    assert {e.type for e in out.entities} == {"PERSON_NAME", "LOCATION"}
+
+
+def test_detect_pii_handles_empty_entities(monkeypatch):
+    state = WorkflowState(workflow_id="wf_test")
+    state.transcript = Transcript(
+        workflow_id="wf_test",
+        transcript_id="tr_test",
+        language="de",
+        segments=[TranscriptSegment(speaker="unknown", text="kein pii")],
+    )
+
+    monkeypatch.setattr(
+        "hybrid_demo.edge.pii_agent._slm_entities", lambda _text: [])
+
+    out = detect_pii(state)
+    assert out.entities == []
+
+
+def test_pii_chunk_retry_on_cancellation(monkeypatch):
+    import hybrid_demo.edge.pii_agent as pii_agent
+
+    class DummyClient:
+        pass
+
+    # Simulate runtime cancellation for long chunks only.
+    def fake_complete_chat_json(_client, messages):
+        chunk = messages[-1]["content"]
+        if len(chunk) > 60:
+            raise RuntimeError(
+                "Error during chat completion: Operation was cancelled")
+        return {"entities": [{"type": "LOCATION", "value": "Wien"}]}
+
+    monkeypatch.setattr(pii_agent, "_complete_chat_json",
+                        fake_complete_chat_json)
+
+    chunk = "Wien " * 40  # Long enough to trigger splitting in the fake above.
+    entities = pii_agent._slm_entities_for_chunk(
+        DummyClient(),
+        chunk,
+        min_chunk_chars=40,
+    )
+
+    assert any(e.type == "LOCATION" and e.value == "Wien" for e in entities)

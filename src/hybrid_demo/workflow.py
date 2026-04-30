@@ -25,6 +25,8 @@ from .cloud.research_agent import research
 from .contracts import (
     HandoverPackage,
     PolicyDecision,
+    Transcript,
+    TranscriptSegment,
     WorkflowState,
 )
 from .edge.pii_agent import detect_pii
@@ -44,6 +46,32 @@ class StageEvent:
     stage: str
     payload: dict
 
+
+def _progress(stage: str, message: str, runtime: str) -> StageEvent:
+    return StageEvent(
+        "progress",
+        {
+            "stage": stage,
+            "message": message,
+            "runtime": runtime,
+        },
+    )
+
+
+async def _run_stage_with_timeout(
+    func,
+    state: WorkflowState,
+    *,
+    timeout_seconds: float,
+    stage_name: str,
+):
+    try:
+        return await asyncio.wait_for(asyncio.to_thread(func, state), timeout=timeout_seconds)
+    except TimeoutError as exc:
+        raise TimeoutError(
+            f"Stage '{stage_name}' timed out after {int(timeout_seconds)}s. "
+            "Please retry with a shorter audio file or check local model runtime health."
+        ) from exc
 
 
 @traced_step(
@@ -80,7 +108,24 @@ async def run_workflow(
     language_hint: str | None = "de-AT",
     force_violation: bool = False,
     workflow_id: str | None = None,
+    transcript_text: str | None = None,
 ) -> AsyncIterator[StageEvent]:
+    import os
+    # Edge stages (local SLM inference) need more time for CPU-based models.
+    # Increase via HYBRID_DEMO_EDGE_TIMEOUT_SECONDS if needed (default 300s).
+    edge_stage_timeout = float(os.environ.get(
+        "HYBRID_DEMO_EDGE_TIMEOUT_SECONDS", "300"))
+    # PII/entity extraction can be the slowest local SLM stage for long
+    # transcripts. Allow a dedicated timeout override for this stage.
+    pii_stage_timeout = float(os.environ.get(
+        "HYBRID_DEMO_PII_TIMEOUT_SECONDS", "600"))
+    cloud_stage_timeout = float(os.environ.get(
+        "HYBRID_DEMO_CLOUD_TIMEOUT_SECONDS", "180"))
+    # Transcription can take much longer than SLM stages for long audio files.
+    # Default 900s to handle ~16-min files on CPU with the small model.
+    # Override with HYBRID_DEMO_TRANSCRIPTION_TIMEOUT_SECONDS.
+    transcription_timeout = float(os.environ.get(
+        "HYBRID_DEMO_TRANSCRIPTION_TIMEOUT_SECONDS", "900"))
     """Run the full pipeline and yield stage events as they complete."""
     workflow_id = workflow_id or f"wf_{uuid.uuid4().hex[:8]}"
     state = WorkflowState(
@@ -88,29 +133,70 @@ async def run_workflow(
         audio_uri=audio_uri,
         language_hint=language_hint,
         force_violation=force_violation,
+        transcript_text=transcript_text,
     )
 
     with tracer().start_as_current_span("workflow") as span:
         span.set_attribute("workflow.id", workflow_id)
         try:
             # 1. Transcription
-            state.transcript = await asyncio.to_thread(transcribe, state)
+            if transcript_text:
+                yield _progress("transcript", "Using provided transcript", "edge")
+                state.transcript = Transcript(
+                    workflow_id=state.workflow_id,
+                    transcript_id=f"tr_{state.workflow_id}",
+                    language=state.language_hint or "de-AT",
+                    segments=[TranscriptSegment(
+                        speaker="unknown", text=transcript_text)],
+                )
+            else:
+                yield _progress("transcript", "Transcribing audio on edge model", "edge")
+                state.transcript = await _run_stage_with_timeout(
+                    transcribe,
+                    state,
+                    timeout_seconds=transcription_timeout,
+                    stage_name="transcript",
+                )
             yield StageEvent("transcript", state.transcript.model_dump())
 
             # 2. PII detection
-            state.sensitivity = await asyncio.to_thread(detect_pii, state)
+            yield _progress("entities", "Detecting sensitive entities on edge SLM", "edge")
+            state.sensitivity = await _run_stage_with_timeout(
+                detect_pii,
+                state,
+                timeout_seconds=pii_stage_timeout,
+                stage_name="entities",
+            )
             yield StageEvent("entities", state.sensitivity.model_dump())
 
             # 3. Redaction
-            state.redacted = await asyncio.to_thread(redact, state)
+            yield _progress("redacted", "Redacting transcript on edge SLM", "edge")
+            state.redacted = await _run_stage_with_timeout(
+                redact,
+                state,
+                timeout_seconds=edge_stage_timeout,
+                stage_name="redacted",
+            )
             yield StageEvent("redacted", state.redacted.model_dump())
 
             # 4. Summary
-            state.handover = await asyncio.to_thread(summarise, state)
+            yield _progress("handover", "Building cloud handover package on edge SLM", "edge")
+            state.handover = await _run_stage_with_timeout(
+                summarise,
+                state,
+                timeout_seconds=edge_stage_timeout,
+                stage_name="handover",
+            )
             yield StageEvent("handover", state.handover.model_dump())
 
             # 5. Policy gate
-            state.policy = await asyncio.to_thread(policy_gate, state)
+            yield _progress("policy_gate", "Evaluating cloud policy gate", "gate")
+            state.policy = await _run_stage_with_timeout(
+                policy_gate,
+                state,
+                timeout_seconds=edge_stage_timeout,
+                stage_name="policy_gate",
+            )
             yield StageEvent("policy_gate", state.policy.model_dump())
 
             if not state.policy.cloud_allowed:
@@ -129,15 +215,38 @@ async def run_workflow(
                 return
 
             # 6. Cloud research
-            state.cloud_result = await research(state)
+            yield _progress("research", "Running cloud research agent", "cloud")
+            try:
+                state.cloud_result = await asyncio.wait_for(research(state), timeout=cloud_stage_timeout)
+            except TimeoutError as exc:
+                raise TimeoutError(
+                    f"Stage 'research' timed out after {int(cloud_stage_timeout)}s. "
+                    "Please verify cloud model connectivity and retry."
+                ) from exc
             yield StageEvent("research", state.cloud_result.model_dump())
 
             # 7. Cloud explanation
-            state.explanation = await explain(state)
+            yield _progress("explanation", "Generating cloud explanation", "cloud")
+            try:
+                state.explanation = await asyncio.wait_for(
+                    explain(state),
+                    timeout=cloud_stage_timeout,
+                )
+            except TimeoutError as exc:
+                raise TimeoutError(
+                    f"Stage 'explanation' timed out after {int(cloud_stage_timeout)}s. "
+                    "Please verify cloud model connectivity and retry."
+                ) from exc
             yield StageEvent("explanation", state.explanation.model_dump())
 
             # 8. Rehydration
-            state.final = await asyncio.to_thread(rehydrate, state)
+            yield _progress("final", "Rehydrating local placeholders", "edge")
+            state.final = await _run_stage_with_timeout(
+                rehydrate,
+                state,
+                timeout_seconds=edge_stage_timeout,
+                stage_name="final",
+            )
             yield StageEvent("final", state.final.model_dump())
         finally:
             vault.forget(workflow_id)

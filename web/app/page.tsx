@@ -9,34 +9,48 @@ export default function Home() {
   const [running, setRunning] = useState(false);
   const [workflowId, setWorkflowId] = useState<string | null>(null);
 
-  async function runWorkflow(opts: { audio: File | null; forceViolation: boolean }) {
+  async function runWorkflow(opts: { audio: File | null; transcript: string; forceViolation: boolean }) {
     setEvents({});
     setRunning(true);
     setWorkflowId(null);
 
-    if (!opts.audio) {
+    if (!opts.audio && !opts.transcript.trim()) {
       setRunning(false);
-      setEvents({ error: { stage: 'error', payload: { message: 'Please select an audio file first.' } } });
+      setEvents({ error: { stage: 'error', payload: { message: 'Please select an audio file or paste a transcript.' } } });
       return;
     }
 
     const form = new FormData();
-    form.append('audio', opts.audio);
+    if (opts.audio) {
+      form.append('audio', opts.audio);
+    }
+    if (opts.transcript.trim()) {
+      form.append('transcript', opts.transcript.trim());
+    }
     form.append('force_violation', String(opts.forceViolation));
     form.append('language_hint', 'de-AT');
 
-    const res = await fetch('/api/run', { method: 'POST', body: form });
-    if (!res.ok) {
-      const errPayload = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-      setEvents({ error: { stage: 'error', payload: { message: errPayload.error ?? `HTTP ${res.status}` } } });
+    let workflow_id: string;
+    try {
+      const res = await fetch('/api/run', { method: 'POST', body: form });
+      if (!res.ok) {
+        const errPayload = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        setEvents({ error: { stage: 'error', payload: { message: errPayload.error ?? `HTTP ${res.status}` } } });
+        setRunning(false);
+        return;
+      }
+      ({ workflow_id } = await res.json());
+      setWorkflowId(workflow_id);
+    } catch {
+      setEvents({ error: { stage: 'error', payload: { message: 'Failed to start workflow. Backend unavailable or network error.' } } });
       setRunning(false);
       return;
     }
-    const { workflow_id } = await res.json();
-    setWorkflowId(workflow_id);
 
     const es = new EventSource(`/api/events/${workflow_id}`);
+    let completed = false;
     const stages = [
+      'progress',
       'transcript',
       'entities',
       'redacted',
@@ -55,12 +69,22 @@ export default function Home() {
       });
     });
     es.addEventListener('done', () => {
+      completed = true;
       es.close();
       setRunning(false);
     });
     es.onerror = () => {
-      es.close();
-      setRunning(false);
+      if (!completed) {
+        setEvents((prev) => ({
+          ...prev,
+          error: {
+            stage: 'error',
+            payload: {
+              message: 'Event stream interrupted. Attempting to reconnect…'
+            }
+          }
+        }));
+      }
     };
   }
 
