@@ -12,7 +12,7 @@ import inspect
 import json
 import logging
 import os
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import Any, Callable, TypeVar
 
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
@@ -47,7 +47,8 @@ def init_tracing() -> None:
             from azure.monitor.opentelemetry.exporter import AzureMonitorTraceExporter
 
             provider.add_span_processor(
-                BatchSpanProcessor(AzureMonitorTraceExporter(connection_string=conn))
+                BatchSpanProcessor(
+                    AzureMonitorTraceExporter(connection_string=conn))
             )
             _log.info("Azure Monitor trace exporter enabled.")
         except Exception as exc:  # pragma: no cover - infra-dependent
@@ -216,28 +217,35 @@ def traced_step(
                 if transcript is not None:
                     segments = getattr(transcript, "segments", None)
                     if isinstance(segments, list):
-                        span.set_attribute("input.transcript.segment_count", len(segments))
+                        span.set_attribute(
+                            "input.transcript.segment_count", len(segments))
 
                 if sensitivity is not None:
                     entities = getattr(sensitivity, "entities", None)
                     if isinstance(entities, list):
-                        span.set_attribute("input.sensitivity.entity_count", len(entities))
+                        span.set_attribute(
+                            "input.sensitivity.entity_count", len(entities))
 
                 if redacted is not None:
-                    redacted_segments = getattr(redacted, "redacted_segments", None)
+                    redacted_segments = getattr(
+                        redacted, "redacted_segments", None)
                     if isinstance(redacted_segments, list):
-                        span.set_attribute("input.redaction.segment_count", len(redacted_segments))
+                        span.set_attribute(
+                            "input.redaction.segment_count", len(redacted_segments))
 
                 if handover is not None:
                     span.set_attribute("input.handover.present", True)
 
                 if policy_decision is not None:
-                    cloud_allowed = getattr(policy_decision, "cloud_allowed", None)
+                    cloud_allowed = getattr(
+                        policy_decision, "cloud_allowed", None)
                     violations = getattr(policy_decision, "violations", None)
                     if isinstance(cloud_allowed, bool):
-                        span.set_attribute("input.policy.cloud_allowed", cloud_allowed)
+                        span.set_attribute(
+                            "input.policy.cloud_allowed", cloud_allowed)
                     if isinstance(violations, list):
-                        span.set_attribute("input.policy.violation_count", len(violations))
+                        span.set_attribute(
+                            "input.policy.violation_count", len(violations))
 
             if result is None:
                 return
@@ -246,8 +254,10 @@ def traced_step(
                 ("segments", "output.transcript.segment_count"),
                 ("redacted_segments", "output.redaction.segment_count"),
                 ("entities", "output.sensitivity.entity_count"),
-                ("possible_condition_categories", "output.research.condition_count"),
-                ("recommended_follow_up_questions", "output.research.follow_up_count"),
+                ("possible_condition_categories",
+                 "output.research.condition_count"),
+                ("recommended_follow_up_questions",
+                 "output.research.follow_up_count"),
                 ("red_flags", "output.research.red_flag_count"),
                 ("limitations", "output.research.limitation_count"),
                 ("clinical_reasoning", "output.explanation.reasoning_count"),
@@ -260,14 +270,16 @@ def traced_step(
 
             cloud_allowed = getattr(result, "cloud_allowed", None)
             if isinstance(cloud_allowed, bool):
-                span.set_attribute("output.policy.cloud_allowed", cloud_allowed)
+                span.set_attribute(
+                    "output.policy.cloud_allowed", cloud_allowed)
 
         def _completion_text(result: Any) -> str:
             preview = _obj_preview(result)
             if name == "policy.gate":
                 allowed = getattr(result, "cloud_allowed", None)
                 violations = getattr(result, "violations", None)
-                v_count = len(violations) if isinstance(violations, list) else "unknown"
+                v_count = len(violations) if isinstance(
+                    violations, list) else "unknown"
                 return (
                     f"policy decision: cloud_allowed={allowed}; violations={v_count}; "
                     f"summary=({preview})"
@@ -275,25 +287,30 @@ def traced_step(
 
             if name == "edge.pii":
                 entities = getattr(result, "entities", None)
-                count = len(entities) if isinstance(entities, list) else "unknown"
+                count = len(entities) if isinstance(
+                    entities, list) else "unknown"
                 return f"pii extraction completed: detected_entities={count}; summary=({preview})"
 
             if name == "edge.transcription":
                 segments = getattr(result, "segments", None)
-                count = len(segments) if isinstance(segments, list) else "unknown"
+                count = len(segments) if isinstance(
+                    segments, list) else "unknown"
                 return f"transcription completed: segments={count}; summary=({preview})"
 
             if name == "edge.redaction":
                 redacted_segments = getattr(result, "redacted_segments", None)
-                count = len(redacted_segments) if isinstance(redacted_segments, list) else "unknown"
+                count = len(redacted_segments) if isinstance(
+                    redacted_segments, list) else "unknown"
                 return f"redaction completed: redacted_segments={count}; summary=({preview})"
 
             if name == "edge.summary":
                 return f"handover package prepared for cloud step; summary=({preview})"
 
             if name == "cloud.research":
-                conditions = getattr(result, "possible_condition_categories", None)
-                cond_count = len(conditions) if isinstance(conditions, list) else "unknown"
+                conditions = getattr(
+                    result, "possible_condition_categories", None)
+                cond_count = len(conditions) if isinstance(
+                    conditions, list) else "unknown"
                 return (
                     f"cloud research completed: condition_candidates={cond_count}; "
                     f"summary=({preview})"
@@ -329,7 +346,8 @@ def traced_step(
                 return
 
             completion_text = _completion_text(result)
-            _emit_genai_event(span, "gen_ai.assistant.message", completion_text)
+            _emit_genai_event(
+                span, "gen_ai.assistant.message", completion_text)
             _emit_genai_event(span, "gen_ai.choice", completion_text)
 
         if is_coro:
@@ -342,13 +360,17 @@ def traced_step(
                         span.set_attribute(k, v)
                     _emit_flow_markers(span, state, completion=False)
                     try:
-                        result = await func(*args, **kwargs)  # type: ignore[misc]
+                        # type: ignore[misc]
+                        result = await func(*args, **kwargs)
                     except Exception:
-                        span.set_attribute("gen_ai.response.finish_reasons", "error")
+                        span.set_attribute(
+                            "gen_ai.response.finish_reasons", "error")
                         raise
                     _set_enrichment_attrs(span, state, result)
-                    _emit_flow_markers(span, state, completion=True, result=result)
-                    span.set_attribute("gen_ai.response.finish_reasons", "stop")
+                    _emit_flow_markers(
+                        span, state, completion=True, result=result)
+                    span.set_attribute(
+                        "gen_ai.response.finish_reasons", "stop")
                     return result
 
             return awrapper  # type: ignore[return-value]
@@ -363,7 +385,8 @@ def traced_step(
                 try:
                     result = func(*args, **kwargs)
                 except Exception:
-                    span.set_attribute("gen_ai.response.finish_reasons", "error")
+                    span.set_attribute(
+                        "gen_ai.response.finish_reasons", "error")
                     raise
                 _set_enrichment_attrs(span, state, result)
                 _emit_flow_markers(span, state, completion=True, result=result)

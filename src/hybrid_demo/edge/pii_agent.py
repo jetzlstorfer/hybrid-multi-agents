@@ -18,9 +18,6 @@ from ..contracts import (
     Transcript,
     WorkflowState,
 )
-from ..policy import (
-    CLOUD_FORBIDDEN_ENTITY_TYPES,
-)
 from ..telemetry import traced_step
 
 _log = logging.getLogger(__name__)
