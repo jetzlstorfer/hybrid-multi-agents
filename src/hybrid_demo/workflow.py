@@ -23,7 +23,6 @@ from . import policy, vault
 from .cloud.explanation_agent import explain
 from .cloud.research_agent import research
 from .contracts import (
-    HandoverPackage,
     PolicyDecision,
     Transcript,
     TranscriptSegment,
