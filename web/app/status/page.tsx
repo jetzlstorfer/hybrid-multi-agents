@@ -78,9 +78,16 @@ export default function StatusPage() {
 
   // Initial load + auto-refresh every 10 seconds.
   useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 10_000);
-    return () => clearInterval(id);
+    const kickoff = setTimeout(() => {
+      void refresh();
+    }, 0);
+    const id = setInterval(() => {
+      void refresh();
+    }, 10_000);
+    return () => {
+      clearTimeout(kickoff);
+      clearInterval(id);
+    };
   }, []);
 
   return (
@@ -123,15 +130,14 @@ export default function StatusPage() {
                 {data.models.map((m) => (
                   <section
                     key={m.role}
-                    className={`rounded-lg border-2 bg-slate-900 p-4 ${
-                      m.status === 'loaded'
+                    className={`rounded-lg border-2 bg-slate-900 p-4 ${m.status === 'loaded'
                         ? 'border-ok'
                         : m.status === 'cached'
                           ? 'border-emerald-600'
                           : m.status === 'not_cached' || m.status === 'sdk_missing'
                             ? 'border-amber-600'
                             : 'border-block'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-start justify-between gap-4">
                       <div>

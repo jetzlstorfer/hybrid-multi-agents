@@ -28,6 +28,8 @@ warn()    { echo -e "${YELLOW}[demo]${NC} $*"; }
 die()     { echo -e "${RED}[demo] ERROR:${NC} $*" >&2; exit 1; }
 
 WEB_LOG="${WEB_LOG:-/tmp/hybrid-demo-web.log}"
+WEB_PORT="${WEB_PORT:-3000}"
+NEXT_DEV_ENGINE="${NEXT_DEV_ENGINE:-webpack}"
 
 # ── .env ────────────────────────────────────────────────────────────────────
 if [ ! -f .env ]; then
@@ -149,31 +151,51 @@ if ! curl -sf http://localhost:8000/healthz &>/dev/null; then
   die "Backend not reachable at http://localhost:8000/healthz"
 fi
 
-info "Starting web UI (http://localhost:3000)..."
 WEB_PID=""
-rm -f "$WEB_LOG"
-(cd web && npm run dev -- --port 3000) >"$WEB_LOG" 2>&1 &
-WEB_PID=$!
+if curl -sf "http://localhost:${WEB_PORT}" >/dev/null 2>&1; then
+  warn "Web UI already running on :${WEB_PORT}; reusing existing process."
+else
+  STALE_WEB_PID="$(lsof -t -nP -iTCP:${WEB_PORT} -sTCP:LISTEN 2>/dev/null | head -n 1 || true)"
+  if [ -n "$STALE_WEB_PID" ]; then
+    die "Port ${WEB_PORT} is occupied by PID $STALE_WEB_PID, but the web UI is not responding. Stop it (kill $STALE_WEB_PID) and retry."
+  fi
+
+  info "Starting web UI (http://localhost:${WEB_PORT}) via Next.js ${NEXT_DEV_ENGINE} dev server..."
+  rm -f "$WEB_LOG"
+  if [ "$NEXT_DEV_ENGINE" = "webpack" ]; then
+    (cd web && npx next dev --webpack --port "$WEB_PORT") >"$WEB_LOG" 2>&1 &
+  else
+    (cd web && npx next dev --port "$WEB_PORT") >"$WEB_LOG" 2>&1 &
+  fi
+  WEB_PID=$!
+fi
 
 for i in $(seq 1 40); do
-  if curl -sf http://localhost:3000 >/dev/null 2>&1; then
+  if curl -sf "http://localhost:${WEB_PORT}" >/dev/null 2>&1; then
     break
   fi
-  if ! kill -0 "$WEB_PID" 2>/dev/null; then
+  if [ -n "$WEB_PID" ] && ! kill -0 "$WEB_PID" 2>/dev/null; then
     warn "Web process exited during startup. Last log lines:"
     tail -n 80 "$WEB_LOG" || true
-    die "Web UI failed to start. Current Node: ${NODE_VERSION:-unknown}. Try Node 20 LTS."
+    die "Web UI failed to start. Current Node: ${NODE_VERSION:-unknown}."
   fi
   sleep 0.5
 done
 
-if ! curl -sf http://localhost:3000 >/dev/null 2>&1; then
-  warn "Web process did not become ready on :3000. Last log lines:"
+if ! curl -sf "http://localhost:${WEB_PORT}" >/dev/null 2>&1; then
+  warn "Web process did not become ready on :${WEB_PORT}. Last log lines:"
   tail -n 80 "$WEB_LOG" || true
-  die "Web UI not reachable at http://localhost:3000"
+  die "Web UI not reachable at http://localhost:${WEB_PORT}"
 fi
 
-info "Opening browser → http://localhost:3000"
-open http://localhost:3000 2>/dev/null || xdg-open http://localhost:3000 2>/dev/null || true
+info "Opening browser → http://localhost:${WEB_PORT}"
+open "http://localhost:${WEB_PORT}" 2>/dev/null || xdg-open "http://localhost:${WEB_PORT}" 2>/dev/null || true
 info "Press Ctrl-C to stop."
-wait "$WEB_PID"
+if [ -n "$WEB_PID" ]; then
+  wait "$WEB_PID"
+elif [ -n "$BACKEND_PID" ]; then
+  warn "Reusing existing web UI process on :${WEB_PORT}; waiting on backend process."
+  wait "$BACKEND_PID"
+else
+  warn "Reusing existing backend and web processes; launcher exiting without taking ownership."
+fi

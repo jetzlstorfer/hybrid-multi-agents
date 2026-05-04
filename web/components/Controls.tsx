@@ -50,7 +50,7 @@ export function Controls({ running, onRun }: Props) {
           accept="audio/*"
           disabled={running}
           onChange={(e) => setAudio(e.target.files?.[0] ?? null)}
-          className="text-sm text-slate-300"
+          className="max-w-full rounded border border-slate-700 bg-slate-800 px-2 py-1 text-sm text-slate-300 file:mr-3 file:rounded file:border-0 file:bg-edge file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
         />
       ) : (
         <textarea
