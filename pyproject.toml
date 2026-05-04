@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hybrid-demo"
+version = "0.1.0"
+description = "Hybrid multi-agent demo: edge SLMs + cloud LLMs with a privacy boundary."
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = [
+    "agent-framework-core==1.2.0",
+    "agent-framework-foundry==1.2.0",
+    "azure-identity>=1.18.0",
+    "azure-core>=1.31.0",
+    "azure-monitor-opentelemetry>=1.6.0",
+    "opentelemetry-api>=1.27.0",
+    "opentelemetry-sdk>=1.27.0",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "python-multipart>=0.0.9",
+    "sse-starlette>=2.1.0",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.4",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+local = [
+    "foundry-local-sdk>=1.0.0",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "yt-dlp>=2024.10.7",
+]
+
+[project.scripts]
+hybrid-demo-server = "hybrid_demo.ag_ui_server:run_server"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

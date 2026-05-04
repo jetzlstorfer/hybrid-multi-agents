@@ -1,0 +1,52 @@
+name: gitops-bump
+
+on:
+  workflow_call:
+    inputs:
+      component:
+        type: string
+        required: true
+        description: "backend or web"
+      image:
+        type: string
+        required: true
+      tag:
+        type: string
+        required: true
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kustomize
+        run: |
+          curl -sLo kustomize.tar.gz \
+            https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz
+          tar -xzf kustomize.tar.gz
+          sudo mv kustomize /usr/local/bin/
+      - name: Bump image tag in microshift-edge overlay
+        working-directory: gitops/overlays/microshift-edge
+        run: |
+          kustomize edit set image "${{ inputs.image }}=${{ inputs.image }}:${{ inputs.tag }}"
+          cat kustomization.yaml
+      - uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: gitops/bump-${{ inputs.component }}-${{ inputs.tag }}
+          base: main
+          commit-message: "chore(gitops): bump ${{ inputs.component }} to ${{ inputs.tag }}"
+          title: "chore(gitops): bump ${{ inputs.component }} to ${{ inputs.tag }}"
+          body: |
+            Automated image tag bump from build pipeline.
+
+            * component: `${{ inputs.component }}`
+            * image: `${{ inputs.image }}:${{ inputs.tag }}`
+
+            Merging this PR triggers Argo CD to roll out the new revision on
+            the MicroShift edge cluster.
+          labels: gitops, automated
+          delete-branch: true

@@ -1,0 +1,29 @@
+{
+  "language": "de-AT",
+  "segments": [
+    {
+      "speaker": "doctor",
+      "text": "Guten Morgen, was führt Sie heute zu mir?"
+    },
+    {
+      "speaker": "patient",
+      "text": "Mein Name ist Anna Müller, ich bin 42 Jahre alt und wohne in Wien. Ich habe seit 3 Tagen Schmerzen in der Brust."
+    },
+    {
+      "speaker": "doctor",
+      "text": "Strahlt der Schmerz in den Arm oder Kiefer aus?"
+    },
+    {
+      "speaker": "patient",
+      "text": "Manchmal in den linken Arm. Ich nehme regelmäßig Aspirin. Sie können mich unter anna.mueller@example.com erreichen oder unter +43 660 1234567."
+    },
+    {
+      "speaker": "doctor",
+      "text": "Haben Sie Atemnot oder Schweißausbrüche?"
+    },
+    {
+      "speaker": "patient",
+      "text": "Etwas Atemnot, ja. Meine Sozialversicherungsnummer ist 1234 010180."
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node / Next.js
+node_modules/
+web/.next/
+web/out/
+web/.turbo/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Local secrets
+.env
+.env.local
+
+# Sample audio is fetched on demand
+samples/audio/

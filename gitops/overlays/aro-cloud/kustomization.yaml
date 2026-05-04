@@ -1,0 +1,7 @@
+# Optional ARO overlay. Not required for the demo (cloud agents run in
+# Microsoft Foundry, not in a separate ARO workload). Kept as a scaffold so
+# the repo structure documents both runtime sides.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: hybrid-demo-cloud
+resources: []
