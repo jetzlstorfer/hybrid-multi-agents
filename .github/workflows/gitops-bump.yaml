@@ -21,7 +21,7 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install kustomize
         run: |
           curl -sLo kustomize.tar.gz \
@@ -33,7 +33,7 @@ jobs:
         run: |
           kustomize edit set image "${{ inputs.image }}=${{ inputs.image }}:${{ inputs.tag }}"
           cat kustomization.yaml
-      - uses: peter-evans/create-pull-request@v6
+      - uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           branch: gitops/bump-${{ inputs.component }}-${{ inputs.tag }}
