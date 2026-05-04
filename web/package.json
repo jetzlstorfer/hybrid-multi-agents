@@ -28,6 +28,6 @@
     "tailwindcss": "3.4.13",
     "typescript": "5.5.3",
     "eslint": "8.57.0",
-    "eslint-config-next": "14.2.13"
+    "eslint-config-next": "16.2.4"
   }
 }
