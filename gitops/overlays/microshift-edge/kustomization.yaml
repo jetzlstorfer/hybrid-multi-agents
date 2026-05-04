@@ -2,29 +2,36 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: hybrid-demo
 resources:
-  - ../../base/namespace.yaml
-  - ../../base/foundry-local
-  - ../../base/otel-collector
-  - ../../base/backend
-  - ../../base/web
+- ../../base/namespace.yaml
+- ../../base/foundry-local
+- ../../base/otel-collector
+- ../../base/backend
+- ../../base/web
 
 # Image tags are mutated by .github/workflows/gitops-bump.yaml when a new
 # image is built and pushed to GHCR. Do not edit manually.
 images:
-  - name: ghcr.io/hybrid-multi-agents/backend
-    newTag: latest
-  - name: ghcr.io/hybrid-multi-agents/web
-    newTag: latest
+- name: ghcr.io/hybrid-multi-agents/backend
+  newTag: latest
+- name: ghcr.io/hybrid-multi-agents/web
+  newTag: latest
+- name: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend
+  newName: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend
+  newTag: sha-59eb170833f6d8889061f1582f52cc501a0f7cbb
 
-patches:
   # MicroShift is single-node: no PDBs, no anti-affinity, replicas pinned to 1.
-  - target: { kind: Deployment, name: backend }
-    patch: |
-      - op: replace
-        path: /spec/replicas
-        value: 1
-  - target: { kind: Deployment, name: web }
-    patch: |
-      - op: replace
-        path: /spec/replicas
-        value: 1
+patches:
+- patch: |
+    - op: replace
+      path: /spec/replicas
+      value: 1
+  target:
+    kind: Deployment
+    name: backend
+- patch: |
+    - op: replace
+      path: /spec/replicas
+      value: 1
+  target:
+    kind: Deployment
+    name: web
