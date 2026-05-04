@@ -2,8 +2,10 @@
 
 Dispatches to either faster-whisper (default; handles long audio natively via
 internal 30-second chunking and VAD silence filtering) or Foundry Local's
-Whisper model.  The active backend is selected by the ``TRANSCRIPTION_BACKEND``
-env var (``faster-whisper`` | ``foundry``; default: ``faster-whisper``).
+Whisper model. Foundry mode chunks input via ffmpeg so recordings longer than
+the model context window are fully transcribed. The active backend is selected
+by the ``TRANSCRIPTION_BACKEND`` env var (``faster-whisper`` | ``foundry``;
+default: ``faster-whisper``).
 """
 
 from __future__ import annotations
@@ -69,6 +71,66 @@ def _convert_to_wav(input_path: Path) -> Path:
     return out_path
 
 
+def _segment_audio_to_wav(input_path: Path, chunk_seconds: int) -> tuple[tempfile.TemporaryDirectory[str], list[Path]]:
+    """Split audio into fixed-length WAV chunks for long Foundry transcriptions."""
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError(
+            "Foundry Local long-audio transcription requires `ffmpeg` for chunking. "
+            "Install ffmpeg or use TRANSCRIPTION_BACKEND=faster-whisper."
+        )
+
+    tmp_dir = tempfile.TemporaryDirectory(prefix="hybrid_demo_chunks_")
+    pattern = str(Path(tmp_dir.name) / "chunk_%05d.wav")
+    cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(input_path),
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-f",
+        "segment",
+        "-segment_time",
+        str(chunk_seconds),
+        "-reset_timestamps",
+        "1",
+        "-c",
+        "pcm_s16le",
+        pattern,
+    ]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        tmp_dir.cleanup()
+        details = (proc.stderr or proc.stdout or "unknown ffmpeg error").strip()
+        raise RuntimeError(f"Audio chunking via ffmpeg failed: {details}")
+
+    chunks = sorted(Path(tmp_dir.name).glob("chunk_*.wav"))
+    if not chunks:
+        tmp_dir.cleanup()
+        raise RuntimeError("Audio chunking produced no segments")
+
+    return tmp_dir, chunks
+
+
+def _transcribe_foundry(client, audio_path: Path) -> str:
+    """Transcribe full audio with Foundry Local using chunking for long files."""
+    chunk_seconds = int(os.environ.get("HYBRID_DEMO_FOUNDRY_CHUNK_SECONDS", "25"))
+    if chunk_seconds <= 0:
+        return (client.transcribe(str(audio_path)).text or "").strip()
+
+    tmp_dir, chunks = _segment_audio_to_wav(audio_path, chunk_seconds)
+    try:
+        parts = []
+        for chunk in chunks:
+            parts.append((client.transcribe(str(chunk)).text or "").strip())
+        return " ".join(p for p in parts if p).strip()
+    finally:
+        tmp_dir.cleanup()
+
+
 # ---------- faster-whisper backend ----------
 
 
@@ -128,26 +190,25 @@ def transcribe(state: WorkflowState) -> Transcript:
     if backend == "faster-whisper":
         text = _transcribe_faster_whisper(audio_path, state.language_hint)
     else:
-        # Foundry Local backend — processes only ~30 s by default; convert
-        # format if the decoder cannot detect the stream.
+        # Foundry Local backend. We chunk audio explicitly so long recordings
+        # are fully transcribed despite ~30 s model windows.
         client = runtime.get_local_audio_client()
         if state.language_hint:
             client.settings.language = state.language_hint.split("-")[0]
         converted_path: Path | None = None
         try:
-            result = client.transcribe(state.audio_uri)
+            text = _transcribe_foundry(client, audio_path)
         except Exception as exc:
             if not _looks_like_audio_format_error(exc):
                 raise
             converted_path = _convert_to_wav(audio_path)
-            result = client.transcribe(str(converted_path))
+            text = _transcribe_foundry(client, converted_path)
         finally:
             if converted_path is not None:
                 try:
                     converted_path.unlink(missing_ok=True)
                 except Exception:
                     pass
-        text = result.text or ""
 
     # Foundry Local returns plain text. We wrap it as a single segment; speaker
     # diarisation is not in scope for the demo.
