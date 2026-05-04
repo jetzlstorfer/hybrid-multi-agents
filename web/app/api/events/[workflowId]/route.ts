@@ -17,9 +17,11 @@ const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:8000';
 
 export async function GET(
   req: NextRequest,
-  { params }: { params: { workflowId: string } }
+  { params }: { params: Promise<{ workflowId: string }> }
 ) {
-  const upstream = await fetch(`${BACKEND_URL}/api/events/${params.workflowId}`, {
+  const { workflowId } = await params;
+
+  const upstream = await fetch(`${BACKEND_URL}/api/events/${workflowId}`, {
     method: 'GET',
     headers: { Accept: 'text/event-stream' },
     // Forward client disconnects so the backend can stop streaming.
