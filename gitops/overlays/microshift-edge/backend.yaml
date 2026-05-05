@@ -29,6 +29,10 @@ spec:
               valueFrom: { secretKeyRef: { name: hybrid-demo-cloud, key: FOUNDRY_PROJECT_ENDPOINT } }
             - name: APPLICATIONINSIGHTS_CONNECTION_STRING
               valueFrom: { secretKeyRef: { name: hybrid-demo-cloud, key: APPLICATIONINSIGHTS_CONNECTION_STRING } }
+            - name: HYBRID_DEMO_CLOUD_BACKEND_URL
+              valueFrom: { secretKeyRef: { name: hybrid-demo-cloud, key: HYBRID_DEMO_CLOUD_BACKEND_URL } }
+            - name: HYBRID_DEMO_PII_TIMEOUT_SECONDS
+              value: "1800"
             # Foundry Local on the host is reached via the ExternalName Service
             # 'foundry-local' (deployed by the hybrid-demo-foundry-local Argo app).
             - name: FOUNDRY_LOCAL_ENDPOINT

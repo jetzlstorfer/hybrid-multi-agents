@@ -109,7 +109,24 @@ class _OpenAICompatibleEdgeClient:
         # Strip thinking tokens so callers always receive the final answer text.
         for choice in response.choices:
             if choice.message and choice.message.content:
-                choice.message.content = _strip_thinking_tags(choice.message.content)
+                raw = choice.message.content
+                stripped = _strip_thinking_tags(raw)
+                _log.debug(
+                    "raw response (%d chars, finish_reason=%s): %.500s",
+                    len(raw),
+                    choice.finish_reason,
+                    raw,
+                )
+                if not stripped:
+                    _log.warning(
+                        "Response content became empty after stripping thinking tags "
+                        "(finish_reason=%s, raw_length=%d). "
+                        "The model likely exhausted max_tokens inside <think> with no answer remaining. "
+                        "Increase max_tokens (e.g. 8192) or add budget_tokens to extra_body.",
+                        choice.finish_reason,
+                        len(raw),
+                    )
+                choice.message.content = stripped
         return response
 
 
@@ -314,7 +331,15 @@ def _make_openai_edge_client(spec: "config.ModelSpec") -> _OpenAICompatibleEdgeC
             "provider 'openai-compatible' requires 'base_url' or 'endpoint_env' in models.yaml."
         )
     api_key = spec.api_key() or "no-key"  # some local servers don't verify the key
-    raw_client = openai.OpenAI(base_url=endpoint, api_key=api_key)
+    # Use a generous HTTP timeout so long reasoning generations on CPU-based
+    # inference servers (llama.cpp) are not aborted client-side before the
+    # proxy/Route timeout fires.  The default openai client timeout is 600s
+    # for read but only 5s for connect; we set both explicitly.
+    raw_client = openai.OpenAI(
+        base_url=endpoint,
+        api_key=api_key,
+        timeout=openai.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0),
+    )
     return _OpenAICompatibleEdgeClient(raw_client, spec.model, spec.options)
 
 
