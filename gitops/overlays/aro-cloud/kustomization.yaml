@@ -10,4 +10,4 @@ images:
   newTag: sha-10bd8d0967a2cc1f9a0ce950eb30cc831c4916c6
 - name: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend
   newName: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend
-  newTag: sha-af2ba0da7131774dca262a85340157161c4f02cf
+  newTag: sha-eaf818598f641720fec927f8b4d56110c295279f
