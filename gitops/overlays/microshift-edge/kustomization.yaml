@@ -8,12 +8,12 @@ resources:
 # Image tags are mutated by .github/workflows/gitops-bump.yaml when a new
 # image is built and pushed to GHCR. Do not edit manually.
 images:
-- name: ghcr.io/hybrid-multi-agents/backend
+- name: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend:sha-10bd8d0967a2cc1f9a0ce950eb30cc831c4916c6
   newTag: latest
-- name: ghcr.io/hybrid-multi-agents/web
+- name: ghcr.io/jetzlstorfer/hybrid-multi-agents/web:sha-7509595d05d8cf07396195afcd9b5174a1146283
   newTag: latest
-- name: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend
-  newName: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend
+- name: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend:sha-10bd8d0967a2cc1f9a0ce950eb30cc831c4916c6
+  newName: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend:sha-10bd8d0967a2cc1f9a0ce950eb30cc831c4916c6
   newTag: sha-10bd8d0967a2cc1f9a0ce950eb30cc831c4916c6
 
   # MicroShift is single-node: no PDBs, no anti-affinity, replicas pinned to 1.
