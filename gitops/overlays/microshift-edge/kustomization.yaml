@@ -14,6 +14,9 @@ images:
 - name: ghcr.io/hybrid-multi-agents/web
   newName: ghcr.io/jetzlstorfer/hybrid-multi-agents/web
   newTag: sha-7509595d05d8cf07396195afcd9b5174a1146283
+- name: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend
+  newName: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend
+  newTag: sha-afbe3b37e8481d6e8191fce1653010ca4eb84dba
 - name: ghcr.io/jetzlstorfer/hybrid-multi-agents/web
   newName: ghcr.io/jetzlstorfer/hybrid-multi-agents/web
   newTag: sha-afa1c67cba3385fd7fba4254290b86b5197f3576
