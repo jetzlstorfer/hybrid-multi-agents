@@ -13,13 +13,13 @@ data:
       batch: {}
     exporters:
       azuremonitor: {}
-      logging: { loglevel: info }
+      debug: { verbosity: normal }
     service:
       pipelines:
         traces:
           receivers: [otlp]
           processors: [batch]
-          exporters: [azuremonitor, logging]
+          exporters: [azuremonitor, debug]
 ---
 apiVersion: apps/v1
 kind: Deployment
