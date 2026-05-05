@@ -112,7 +112,6 @@ async def test_remote_cloud_pipeline_injects_trace_headers(monkeypatch):
 
     monkeypatch.setattr("hybrid_demo.workflow.config.cloud_backend_url", lambda: "https://cloud.example")
 
-    fake_session = _FakeClientSession(timeout=None)
     monkeypatch.setattr(
         "hybrid_demo.workflow.aiohttp.ClientSession",
         lambda *, timeout: _FakeClientSession(timeout=timeout),
