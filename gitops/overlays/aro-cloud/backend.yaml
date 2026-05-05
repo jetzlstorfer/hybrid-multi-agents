@@ -25,6 +25,8 @@ spec:
           env:
             - name: HYBRID_DEMO_DEPLOYMENT_MODE
               value: cloud
+            - name: HYBRID_DEMO_MODELS_FILE
+              value: /config/models.yaml
             - name: FOUNDRY_PROJECT_ENDPOINT
               valueFrom:
                 secretKeyRef:
@@ -36,6 +38,10 @@ spec:
                   name: hybrid-demo-cloud
                   key: APPLICATIONINSIGHTS_CONNECTION_STRING
                   optional: true
+          volumeMounts:
+            - name: models
+              mountPath: /config
+              readOnly: true
           readinessProbe:
             httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 5
@@ -47,6 +53,10 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits:   { cpu: 1,    memory: 1Gi }
+      volumes:
+        - name: models
+          configMap:
+            name: hybrid-demo-models
 ---
 apiVersion: v1
 kind: Service

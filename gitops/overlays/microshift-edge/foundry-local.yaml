@@ -1,0 +1,21 @@
+# Foundry Local — host-side runtime
+#
+# Foundry Local runs natively on the MicroShift host. The cluster reaches it
+# through an ExternalName Service so backend pods can refer to it by the
+# stable DNS name `foundry-local`.
+apiVersion: v1
+kind: Service
+metadata:
+  name: foundry-local
+  labels:
+    app.kubernetes.io/name: foundry-local
+    app.kubernetes.io/part-of: hybrid-demo
+spec:
+  type: ExternalName
+  # MicroShift on a Linux host: use the host bridge address.
+  # On Podman/macOS replace with `host.containers.internal`.
+  externalName: host.containers.internal
+  ports:
+    - name: http
+      port: 5273
+      targetPort: 5273
