@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from threading import Lock
 from typing import Any
 
@@ -19,6 +20,119 @@ _cloud_lock = Lock()
 _local_audio_client: Any = None
 _local_chat_client: Any = None
 _cloud_chat_client: Any = None
+
+# Cache keyed by role for openai-compatible singletons (thread-safe enough for
+# our single-worker demo; extend with per-key locks if needed).
+_openai_edge_clients: dict[str, Any] = {}
+_openai_cloud_clients: dict[str, Any] = {}
+
+
+# ---------- OpenAI-compatible edge wrapper ----------
+
+
+class _OpenAICompatibleEdgeClient:
+    """Thin adapter that wraps an ``openai.OpenAI`` client and exposes the
+    ``complete_chat(messages, tools=None)`` interface expected by edge agents.
+
+    The returned response objects are standard ``openai.ChatCompletion`` objects
+    so ``.choices[0].message.content`` works unchanged.
+
+    Reasoning models (e.g. Qwen3, DeepSeek-R1) wrap their chain-of-thought in
+    ``<think>...</think>`` tags before the final answer.  This adapter strips
+    those blocks so downstream JSON parsing is not affected.
+    """
+
+    #: Signals to callers (e.g. pii_agent) that this client supports
+    #: JSON mode via ``response_format={"type": "json_object"}``.
+    json_mode_supported: bool = True
+
+    def __init__(self, openai_client: Any, model: str, options: dict) -> None:
+        self._client = openai_client
+        self._model = model
+        self._options = options
+
+    def complete_chat(
+        self,
+        messages: list[dict],
+        tools: list | None = None,
+        response_format: dict | None = None,
+    ) -> Any:
+        kwargs: dict[str, Any] = {"model": self._model, "messages": messages}
+        kwargs.update(self._options)
+        if tools:
+            kwargs["tools"] = tools
+        if response_format is not None:
+            kwargs["response_format"] = response_format
+
+        try:
+            response = self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            # Some OpenAI-compatible gateways (especially behind ingress/proxy)
+            # return HTTP 504 for long reasoning generations. Retry once with a
+            # tighter completion token budget while keeping reasoning enabled.
+            if _is_gateway_timeout_error(exc):
+                retry_kwargs = _tighten_token_budget(kwargs)
+                if retry_kwargs is not kwargs:
+                    _log.warning(
+                        "OpenAI-compatible request timed out (504). "
+                        "Retrying with tighter token budget."
+                    )
+                    response = self._client.chat.completions.create(**retry_kwargs)
+                else:
+                    raise
+            else:
+                raise
+
+        # Strip thinking tokens so callers always receive the final answer text.
+        for choice in response.choices:
+            if choice.message and choice.message.content:
+                choice.message.content = _strip_thinking_tags(choice.message.content)
+        return response
+
+
+_THINKING_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def _strip_thinking_tags(text: str) -> str:
+    """Remove ``<think>…</think>`` blocks emitted by reasoning models."""
+    return _THINKING_TAG_RE.sub("", text).strip()
+
+
+def _is_gateway_timeout_error(exc: Exception) -> bool:
+    """Return True when an OpenAI-compatible request failed with HTTP 504."""
+    status_code = getattr(exc, "status_code", None)
+    if status_code == 504:
+        return True
+
+    resp = getattr(exc, "response", None)
+    if resp is not None and getattr(resp, "status_code", None) == 504:
+        return True
+
+    text = str(exc).lower()
+    return "504" in text or "gateway time-out" in text or "gateway timeout" in text
+
+
+def _tighten_token_budget(kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Return a retry kwargs dict with lower completion token budget.
+
+    Keeps reasoning enabled, but caps generation length to reduce proxy timeout
+    risk on long-running reasoning responses.
+    """
+    out = dict(kwargs)
+
+    # OpenAI-compatible APIs may use either key; handle both conservatively.
+    max_tokens = out.get("max_tokens")
+    max_completion_tokens = out.get("max_completion_tokens")
+
+    updated = False
+    if isinstance(max_tokens, int) and max_tokens > 1024:
+        out["max_tokens"] = 1024
+        updated = True
+    if isinstance(max_completion_tokens, int) and max_completion_tokens > 1024:
+        out["max_completion_tokens"] = 1024
+        updated = True
+
+    return out if updated else kwargs
 
 
 def _close_if_supported(obj: Any) -> None:
@@ -88,14 +202,32 @@ def get_local_audio_client():
 
 
 def get_local_chat_client():
-    """Return a Foundry Local chat client for the configured SLM."""
+    """Return a chat client for the configured edge SLM.
+
+    When ``provider`` is ``openai-compatible`` the client is a thin
+    :class:`_OpenAICompatibleEdgeClient` wrapper backed by the ``openai``
+    library; otherwise a Foundry Local SDK chat client is returned.
+    """
     global _local_chat_client
+    spec = config.get_model("edge.slm")
+
+    if spec.provider == "openai-compatible":
+        role = "edge.slm"
+        if role in _openai_edge_clients:
+            return _openai_edge_clients[role]
+        with _local_lock:
+            if role in _openai_edge_clients:
+                return _openai_edge_clients[role]
+            client = _make_openai_edge_client(spec)
+            _openai_edge_clients[role] = client
+            _log.info("Created openai-compatible edge client: model=%s base_url=%s", spec.model, spec.endpoint())
+        return _openai_edge_clients[role]
+
     if _local_chat_client is not None:
         return _local_chat_client
     with _local_lock:
         if _local_chat_client is not None:
             return _local_chat_client
-        spec = config.get_model("edge.slm")
         manager = _ensure_foundry_local()
         model = manager.catalog.get_model(spec.model)
         model.download()
@@ -131,15 +263,71 @@ def get_local_chat_client():
     return _local_chat_client
 
 
-# ---------- Cloud (Microsoft Foundry) ----------
+# ---------- OpenAI-compatible factories ----------
+
+
+def _make_openai_edge_client(spec: "config.ModelSpec") -> _OpenAICompatibleEdgeClient:
+    """Create an :class:`_OpenAICompatibleEdgeClient` from a ModelSpec."""
+    try:
+        import openai
+    except ImportError as exc:
+        raise RuntimeError(
+            "openai package is required for provider 'openai-compatible'. "
+            "Install with `pip install openai`."
+        ) from exc
+
+    endpoint = spec.endpoint()
+    if not endpoint:
+        raise RuntimeError(
+            "provider 'openai-compatible' requires 'base_url' or 'endpoint_env' in models.yaml."
+        )
+    api_key = spec.api_key() or "no-key"  # some local servers don't verify the key
+    raw_client = openai.OpenAI(base_url=endpoint, api_key=api_key)
+    return _OpenAICompatibleEdgeClient(raw_client, spec.model, spec.options)
+
+
+def _make_openai_cloud_client(spec: "config.ModelSpec") -> Any:
+    """Create an ``OpenAIChatCompletionClient`` for a cloud role."""
+    try:
+        from agent_framework.openai import OpenAIChatCompletionClient
+    except ImportError as exc:
+        raise RuntimeError(
+            "agent-framework-openai is required for provider 'openai-compatible' in cloud roles. "
+            "Install with `pip install agent-framework-openai`."
+        ) from exc
+
+    endpoint = spec.endpoint()
+    if not endpoint:
+        raise RuntimeError(
+            "provider 'openai-compatible' requires 'base_url' or 'endpoint_env' in models.yaml."
+        )
+    api_key = spec.api_key() or "no-key"
+    return OpenAIChatCompletionClient(model=spec.model, base_url=endpoint, api_key=api_key)
+
+
+# ---------- Cloud (Microsoft Foundry / OpenAI-compatible) ----------
 
 
 def get_cloud_chat_client(role: str = "cloud.research"):
-    """Return a FoundryChatClient for the given cloud role.
+    """Return a chat client for the given cloud role.
 
-    Roles share a project endpoint but may use different models.
+    When ``provider`` is ``openai-compatible`` an ``OpenAIChatCompletionClient``
+    is returned (no Azure credential required).  Otherwise a ``FoundryChatClient``
+    backed by Azure identity is returned.
     """
     spec = config.get_model(role)
+
+    if spec.provider == "openai-compatible":
+        if role in _openai_cloud_clients:
+            return _openai_cloud_clients[role]
+        with _cloud_lock:
+            if role in _openai_cloud_clients:
+                return _openai_cloud_clients[role]
+            client = _make_openai_cloud_client(spec)
+            _openai_cloud_clients[role] = client
+            _log.info("Created openai-compatible cloud client: role=%s model=%s", role, spec.model)
+        return _openai_cloud_clients[role]
+
     endpoint = spec.endpoint() or os.environ.get("FOUNDRY_PROJECT_ENDPOINT")
     if not endpoint:
         raise RuntimeError(

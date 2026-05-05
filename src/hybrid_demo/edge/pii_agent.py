@@ -141,8 +141,12 @@ def _parse_llm_json(raw: str) -> dict:
 
 def _complete_chat_raw(client: object, messages: list[dict[str, str]]) -> str:
     if hasattr(client, "complete_chat"):
-        # Foundry Local ChatClient currently accepts only messages/tools.
-        response = client.complete_chat(messages=messages)
+        # Foundry Local ChatClient accepts only messages/tools; openai-compatible
+        # clients additionally support response_format for JSON mode.
+        kwargs: dict = {"messages": messages}
+        if getattr(client, "json_mode_supported", False):
+            kwargs["response_format"] = {"type": "json_object"}
+        response = client.complete_chat(**kwargs)
     else:
         response = client.complete(
             messages=messages,

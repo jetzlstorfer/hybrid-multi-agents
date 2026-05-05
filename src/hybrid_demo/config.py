@@ -26,12 +26,30 @@ class ModelSpec(BaseModel):
     provider: str
     model: str
     endpoint_env: str | None = None
+    #: Literal base URL (takes priority over *endpoint_env*).
+    #: Used by the ``openai-compatible`` provider so the URL can be placed
+    #: directly in ``models.yaml`` without a separate env var.
+    base_url: str | None = None
+    #: Name of the env var that holds the API key for ``openai-compatible``
+    #: providers.  Defaults to ``OPENAI_API_KEY`` when not set.
+    api_key_env: str | None = None
     options: dict[str, Any] = Field(default_factory=dict)
 
     def endpoint(self) -> str | None:
+        """Return the effective base URL for this spec.
+
+        Resolution order: ``base_url`` field → value of ``endpoint_env`` → ``None``.
+        """
+        if self.base_url:
+            return self.base_url
         if self.endpoint_env:
             return os.environ.get(self.endpoint_env)
         return None
+
+    def api_key(self) -> str | None:
+        """Return the API key from the configured env var (default: OPENAI_API_KEY)."""
+        env_var = self.api_key_env or "OPENAI_API_KEY"
+        return os.environ.get(env_var)
 
 
 class EdgeModels(BaseModel):
