@@ -24,18 +24,36 @@ import asyncio
 import json
 import logging
 import uuid
+from contextlib import asynccontextmanager
 from typing import AsyncIterator
-from fastapi import BackgroundTasks, FastAPI, Form, UploadFile
+from fastapi import BackgroundTasks, FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from opentelemetry import trace
 from sse_starlette.sse import EventSourceResponse
 
 from . import config, telemetry
+from .cloud.explanation_agent import explain
+from .cloud.research_agent import research
+from .contracts import CloudExecutionResponse, HandoverPackage, WorkflowState
 from .workflow import StageEvent, run_workflow
 
 _log = logging.getLogger(__name__)
 
-app = FastAPI(title="Hybrid Multi-Agent Demo", version="0.1.0")
+# In-memory queue of events per workflow run. Single-process; the demo runs
+# one workflow at a time on stage so this is sufficient.
+_queues: dict[str, asyncio.Queue] = {}
+_SENTINEL = object()
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):  # noqa: ARG001
+    telemetry.init_tracing()
+    yield
+    telemetry.shutdown_tracing()
+
+
+app = FastAPI(title="Hybrid Multi-Agent Demo", version="0.1.0", lifespan=_lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,20 +62,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory queue of events per workflow run. Single-process; the demo runs
-# one workflow at a time on stage so this is sufficient.
-_queues: dict[str, asyncio.Queue] = {}
-_SENTINEL = object()
 
-
-@app.on_event("startup")
-def _startup() -> None:
-    telemetry.init_tracing()
-
-
-@app.on_event("shutdown")
-def _shutdown() -> None:
-    telemetry.shutdown_tracing()
+def _require_mode(*allowed: str) -> None:
+    mode = config.deployment_mode()
+    if mode not in allowed:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Endpoint not available in deployment mode '{mode}'",
+        )
 
 
 @app.get("/healthz")
@@ -68,6 +80,15 @@ def healthz() -> dict:
 @app.get("/api/status")
 async def api_status() -> JSONResponse:
     """Report edge model cache state. Used by the status page in the web UI."""
+    if config.deployment_mode() == "cloud":
+        return JSONResponse(
+            {
+                "overall": "ok",
+                "mode": "cloud",
+                "models": [],
+                "detail": "Local model cache reporting is disabled in cloud deployment mode.",
+            }
+        )
     models = _local_model_cache_statuses()
     model_statuses = {m["status"] for m in models}
     sdk_ok = bool(models) and all(
@@ -210,6 +231,7 @@ async def run(
     language_hint: str = Form("de-AT"),
     force_violation: bool = Form(False),
 ) -> JSONResponse:
+    _require_mode("edge")
     workflow_id = f"wf_{uuid.uuid4().hex[:8]}"
     _queues[workflow_id] = asyncio.Queue()
 
@@ -235,6 +257,27 @@ async def run(
     return JSONResponse({"workflow_id": workflow_id})
 
 
+@app.post("/api/cloud-run", response_model=CloudExecutionResponse)
+async def cloud_run(request: Request, handover: HandoverPackage) -> CloudExecutionResponse:
+    """Execute only the cloud-side stages for an already-redacted handover."""
+    _require_mode("cloud")
+    with telemetry.use_extracted_context(request.headers):
+        with telemetry.tracer().start_as_current_span(
+            "http.cloud_run",
+            kind=trace.SpanKind.SERVER,
+        ) as span:
+            span.set_attribute("workflow.id", handover.workflow_id)
+            span.set_attribute("http.route", "/api/cloud-run")
+            state = WorkflowState(workflow_id=handover.workflow_id, handover=handover)
+            state.cloud_result = await research(state)
+            state.explanation = await explain(state)
+    return CloudExecutionResponse(
+        workflow_id=state.workflow_id,
+        cloud_result=state.cloud_result,
+        explanation=state.explanation,
+    )
+
+
 async def _sse(workflow_id: str) -> AsyncIterator[dict]:
     queue = _queues.get(workflow_id)
     if queue is None:
@@ -255,6 +298,7 @@ async def _sse(workflow_id: str) -> AsyncIterator[dict]:
 
 @app.get("/api/events/{workflow_id}")
 async def events(workflow_id: str) -> EventSourceResponse:
+    _require_mode("edge")
     return EventSourceResponse(_sse(workflow_id))
 
 
@@ -269,6 +313,7 @@ async def events(workflow_id: str) -> EventSourceResponse:
 
 @app.post("/agui")
 async def agui(payload: dict | None = None) -> EventSourceResponse:
+    _require_mode("edge")
     payload = payload or {}
     workflow_id = f"wf_{uuid.uuid4().hex[:8]}"
     _queues[workflow_id] = asyncio.Queue()

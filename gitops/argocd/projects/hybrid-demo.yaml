@@ -10,6 +10,8 @@ spec:
   destinations:
     - namespace: hybrid-demo
       server: https://kubernetes.default.svc
+    - namespace: hybrid-demo-cloud
+      server: https://kubernetes.default.svc
   clusterResourceWhitelist:
     - group: ""
       kind: Namespace

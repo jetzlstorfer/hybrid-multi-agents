@@ -123,6 +123,12 @@ class Explanation(BaseModel):
     )
 
 
+class CloudExecutionResponse(BaseModel):
+    workflow_id: str
+    cloud_result: CloudResult
+    explanation: Explanation
+
+
 # ---------- Final ----------
 
 

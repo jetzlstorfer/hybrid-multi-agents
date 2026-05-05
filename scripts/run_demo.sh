@@ -59,26 +59,40 @@ else
   info "Transcription backend: foundry"
 fi
 
-info "Pre-warming edge SLM via foundry-local-sdk (cached after first run)..."
+info "Pre-warming edge models via foundry-local-sdk (skipped for openai-compatible providers)..."
 if ! "$PYTHON_BIN" - <<'PYEOF'
 import sys, os
 import yaml
 from pathlib import Path
 
-try:
-    from foundry_local_sdk import Configuration, FoundryLocalManager
-except ImportError:
-  print("[demo] foundry-local-sdk not importable.", flush=True)
-  sys.exit(1)
-
 cfg = yaml.safe_load(Path("models.yaml").read_text())
-slm = cfg["edge"]["slm"]["model"]
+slm_spec = cfg["edge"]["slm"]
+slm_provider = slm_spec.get("provider", "foundry-local")
 
 # Only include whisper when using the foundry backend
 backend = os.environ.get("TRANSCRIPTION_BACKEND", "faster-whisper").lower()
-models_to_warm = [slm]
-if backend != "faster-whisper":
-    models_to_warm.insert(0, cfg["edge"]["transcription"]["model"])
+transcription_spec = cfg["edge"]["transcription"]
+transcription_provider = transcription_spec.get("provider", "foundry")
+
+# Collect models that actually live in the Foundry Local catalog.
+models_to_warm = []
+if slm_provider == "foundry-local":
+    models_to_warm.append(slm_spec["model"])
+else:
+    print(f"[demo]   skipping SLM pre-warm (provider={slm_provider})", flush=True)
+
+if backend != "faster-whisper" and transcription_provider not in ("openai-compatible",):
+    models_to_warm.insert(0, transcription_spec["model"])
+
+if not models_to_warm:
+    print("[demo]   no Foundry Local models to pre-warm.", flush=True)
+    sys.exit(0)
+
+try:
+    from foundry_local_sdk import Configuration, FoundryLocalManager
+except ImportError:
+    print("[demo] foundry-local-sdk not importable.", flush=True)
+    sys.exit(1)
 
 if FoundryLocalManager.instance is None:
     FoundryLocalManager.initialize(Configuration(app_name="hybrid_demo"))

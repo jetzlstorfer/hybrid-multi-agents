@@ -1,11 +1,11 @@
-# Argo CD Application that bootstraps the edge/MicroShift deployment.
+# Argo CD Application that bootstraps the cloud/ARO deployment.
 #
-#   oc apply -f gitops/argocd/app-of-apps.yaml
+#   oc apply -f gitops/argocd/app-of-apps-cloud.yaml
 #
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: hybrid-demo-bootstrap
+  name: hybrid-demo-cloud-bootstrap
   namespace: openshift-gitops
   finalizers:
     - resources-finalizer.argocd.argoproj.io
@@ -14,7 +14,7 @@ spec:
   source:
     repoURL: https://github.com/jetzlstorfer/hybrid-multi-agents.git
     targetRevision: HEAD
-    path: gitops/argocd/apps/edge
+    path: gitops/argocd/apps/cloud
   destination:
     server: https://kubernetes.default.svc
     namespace: openshift-gitops

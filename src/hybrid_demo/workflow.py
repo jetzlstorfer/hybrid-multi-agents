@@ -14,15 +14,17 @@ event and the cloud steps are skipped.
 from __future__ import annotations
 
 import asyncio
+import aiohttp
 import logging
 import uuid
 from dataclasses import dataclass
 from typing import AsyncIterator
 
-from . import policy, vault
+from . import config, policy, vault
 from .cloud.explanation_agent import explain
 from .cloud.research_agent import research
 from .contracts import (
+    CloudExecutionResponse,
     PolicyDecision,
     Transcript,
     TranscriptSegment,
@@ -33,7 +35,7 @@ from .edge.redaction_agent import redact
 from .edge.rehydration_agent import rehydrate
 from .edge.summary_agent import summarise
 from .edge.transcription_agent import transcribe
-from .telemetry import traced_step, tracer
+from .telemetry import inject_trace_context, traced_step, tracer
 
 _log = logging.getLogger(__name__)
 
@@ -99,6 +101,34 @@ def policy_gate(state: WorkflowState) -> PolicyDecision:
         payload = handover.model_dump()
 
     return policy.validate_handover(payload)
+
+
+async def _run_remote_cloud_pipeline(
+    state: WorkflowState,
+    *,
+    timeout_seconds: float,
+) -> CloudExecutionResponse:
+    cloud_backend_url = config.cloud_backend_url()
+    if not cloud_backend_url:
+        raise RuntimeError("HYBRID_DEMO_CLOUD_BACKEND_URL is not configured")
+
+    endpoint = f"{cloud_backend_url.rstrip('/')}/api/cloud-run"
+    timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+    headers = inject_trace_context({})
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        async with session.post(
+            endpoint,
+            json=state.handover.model_dump(),
+            headers=headers,
+        ) as response:
+            payload = await response.json()
+            if response.status >= 400:
+                message = payload.get("detail") if isinstance(payload, dict) else None
+                raise RuntimeError(
+                    f"Remote cloud backend returned HTTP {response.status}"
+                    + (f": {message}" if message else "")
+                )
+    return CloudExecutionResponse.model_validate(payload)
 
 
 async def run_workflow(
@@ -215,27 +245,42 @@ async def run_workflow(
 
             # 6. Cloud research
             yield _progress("research", "Running cloud research agent", "cloud")
-            try:
-                state.cloud_result = await asyncio.wait_for(research(state), timeout=cloud_stage_timeout)
-            except TimeoutError as exc:
-                raise TimeoutError(
-                    f"Stage 'research' timed out after {int(cloud_stage_timeout)}s. "
-                    "Please verify cloud model connectivity and retry."
-                ) from exc
+            if config.cloud_backend_url():
+                try:
+                    remote_result = await _run_remote_cloud_pipeline(
+                        state,
+                        timeout_seconds=cloud_stage_timeout,
+                    )
+                except TimeoutError as exc:
+                    raise TimeoutError(
+                        f"Stage 'research' timed out after {int(cloud_stage_timeout)}s. "
+                        "Please verify remote cloud backend connectivity and retry."
+                    ) from exc
+                state.cloud_result = remote_result.cloud_result
+                state.explanation = remote_result.explanation
+            else:
+                try:
+                    state.cloud_result = await asyncio.wait_for(research(state), timeout=cloud_stage_timeout)
+                except TimeoutError as exc:
+                    raise TimeoutError(
+                        f"Stage 'research' timed out after {int(cloud_stage_timeout)}s. "
+                        "Please verify cloud model connectivity and retry."
+                    ) from exc
             yield StageEvent("research", state.cloud_result.model_dump())
 
             # 7. Cloud explanation
             yield _progress("explanation", "Generating cloud explanation", "cloud")
-            try:
-                state.explanation = await asyncio.wait_for(
-                    explain(state),
-                    timeout=cloud_stage_timeout,
-                )
-            except TimeoutError as exc:
-                raise TimeoutError(
-                    f"Stage 'explanation' timed out after {int(cloud_stage_timeout)}s. "
-                    "Please verify cloud model connectivity and retry."
-                ) from exc
+            if state.explanation is None:
+                try:
+                    state.explanation = await asyncio.wait_for(
+                        explain(state),
+                        timeout=cloud_stage_timeout,
+                    )
+                except TimeoutError as exc:
+                    raise TimeoutError(
+                        f"Stage 'explanation' timed out after {int(cloud_stage_timeout)}s. "
+                        "Please verify cloud model connectivity and retry."
+                    ) from exc
             yield StageEvent("explanation", state.explanation.model_dump())
 
             # 8. Rehydration

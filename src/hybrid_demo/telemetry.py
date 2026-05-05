@@ -7,14 +7,16 @@ demo proves the data boundary visually in the Foundry project's Tracing tab.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import functools
 import inspect
 import json
 import logging
 import os
-from typing import Any, Callable, TypeVar
+from typing import Any, Callable, Iterator, Mapping, MutableMapping, TypeVar
 
-from opentelemetry import trace
+from opentelemetry import propagate, trace
+from opentelemetry.context import attach, detach
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
@@ -78,6 +80,23 @@ def shutdown_tracing() -> None:
 def tracer():
     init_tracing()
     return trace.get_tracer(SERVICE_NAME)
+
+
+def inject_trace_context(
+    headers: MutableMapping[str, str] | None = None,
+) -> MutableMapping[str, str]:
+    carrier: MutableMapping[str, str] = headers or {}
+    propagate.inject(carrier=carrier)
+    return carrier
+
+
+@contextmanager
+def use_extracted_context(headers: Mapping[str, str]) -> Iterator[None]:
+    token = attach(propagate.extract(carrier=dict(headers)))
+    try:
+        yield
+    finally:
+        detach(token)
 
 
 F = TypeVar("F", bound=Callable[..., Any])

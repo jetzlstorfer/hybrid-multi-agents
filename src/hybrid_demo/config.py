@@ -119,6 +119,18 @@ def get_model(role: str) -> ModelSpec:
     return obj
 
 
+def cloud_backend_url() -> str | None:
+    """Optional inter-cluster backend URL for remote cloud-stage execution."""
+    value = os.environ.get("HYBRID_DEMO_CLOUD_BACKEND_URL", "").strip()
+    return value or None
+
+
+def deployment_mode() -> str:
+    """Return the runtime role for this backend instance: ``edge`` or ``cloud``."""
+    value = os.environ.get("HYBRID_DEMO_DEPLOYMENT_MODE", "edge").strip().lower()
+    return value if value in {"edge", "cloud"} else "edge"
+
+
 def reload() -> None:
     """Drop the cached registry; useful in tests after env changes."""
     registry.cache_clear()

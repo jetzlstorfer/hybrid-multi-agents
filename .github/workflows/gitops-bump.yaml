@@ -28,11 +28,25 @@ jobs:
             https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.4.3/kustomize_v5.4.3_linux_amd64.tar.gz
           tar -xzf kustomize.tar.gz
           sudo mv kustomize /usr/local/bin/
-      - name: Bump image tag in microshift-edge overlay
-        working-directory: gitops/overlays/microshift-edge
+      - name: Bump image tags in GitOps overlays
         run: |
-          kustomize edit set image "${{ inputs.image }}=${{ inputs.image }}:${{ inputs.tag }}"
-          cat kustomization.yaml
+          set -euo pipefail
+
+          bump_overlay() {
+            overlay_dir="$1"
+            (
+              cd "$overlay_dir"
+              kustomize edit set image "${{ inputs.image }}=${{ inputs.image }}:${{ inputs.tag }}"
+              echo "Updated ${overlay_dir}/kustomization.yaml"
+              cat kustomization.yaml
+            )
+          }
+
+          bump_overlay gitops/overlays/microshift-edge
+
+          if [ "${{ inputs.component }}" = "backend" ]; then
+            bump_overlay gitops/overlays/aro-cloud
+          fi
       - uses: peter-evans/create-pull-request@v8
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -47,6 +61,6 @@ jobs:
             * image: `${{ inputs.image }}:${{ inputs.tag }}`
 
             Merging this PR triggers Argo CD to roll out the new revision on
-            the MicroShift edge cluster.
+            the GitOps-managed cluster overlays updated by this PR.
           labels: gitops, automated
           delete-branch: true

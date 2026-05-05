@@ -1,17 +1,17 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: backend
+  name: cloud-backend
   labels:
-    app.kubernetes.io/name: backend
+    app.kubernetes.io/name: cloud-backend
     app.kubernetes.io/part-of: hybrid-demo
 spec:
   replicas: 1
   selector:
-    matchLabels: { app.kubernetes.io/name: backend }
+    matchLabels: { app.kubernetes.io/name: cloud-backend }
   template:
     metadata:
-      labels: { app.kubernetes.io/name: backend }
+      labels: { app.kubernetes.io/name: cloud-backend }
     spec:
       securityContext:
         runAsNonRoot: true
@@ -23,20 +23,19 @@ spec:
             - containerPort: 8000
               name: http
           env:
-            - name: HYBRID_DEMO_MODELS_FILE
-              value: /config/models.yaml
+            - name: HYBRID_DEMO_DEPLOYMENT_MODE
+              value: cloud
             - name: FOUNDRY_PROJECT_ENDPOINT
-              valueFrom: { secretKeyRef: { name: hybrid-demo-cloud, key: FOUNDRY_PROJECT_ENDPOINT } }
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-demo-cloud
+                  key: FOUNDRY_PROJECT_ENDPOINT
             - name: APPLICATIONINSIGHTS_CONNECTION_STRING
-              valueFrom: { secretKeyRef: { name: hybrid-demo-cloud, key: APPLICATIONINSIGHTS_CONNECTION_STRING } }
-            # Foundry Local on the host is reached via the ExternalName Service
-            # 'foundry-local' (see gitops/base/foundry-local).
-            - name: FOUNDRY_LOCAL_ENDPOINT
-              value: http://foundry-local:5273
-          volumeMounts:
-            - name: models
-              mountPath: /config
-              readOnly: true
+              valueFrom:
+                secretKeyRef:
+                  name: hybrid-demo-cloud
+                  key: APPLICATIONINSIGHTS_CONNECTION_STRING
+                  optional: true
           readinessProbe:
             httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 5
@@ -47,18 +46,14 @@ spec:
             periodSeconds: 30
           resources:
             requests: { cpu: 100m, memory: 256Mi }
-            limits:   { cpu: 1,    memory: 1Gi  }
-      volumes:
-        - name: models
-          configMap:
-            name: hybrid-demo-models
+            limits:   { cpu: 1,    memory: 1Gi }
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: backend
+  name: cloud-backend
 spec:
-  selector: { app.kubernetes.io/name: backend }
+  selector: { app.kubernetes.io/name: cloud-backend }
   ports:
     - name: http
       port: 8000
@@ -67,9 +62,9 @@ spec:
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: backend
+  name: cloud-backend
 spec:
-  to: { kind: Service, name: backend }
+  to: { kind: Service, name: cloud-backend }
   port: { targetPort: http }
   tls:
     termination: edge
