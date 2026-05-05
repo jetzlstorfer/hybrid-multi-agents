@@ -6,7 +6,7 @@ metadata:
 spec:
   description: Hybrid multi-agent demo
   sourceRepos:
-    - https://github.com/hybrid-multi-agents/hybrid-multi-agents.git
+    - https://github.com/jetzlstorfer/hybrid-multi-agents.git
   destinations:
     - namespace: hybrid-demo
       server: https://kubernetes.default.svc
