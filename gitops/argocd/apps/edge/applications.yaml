@@ -21,25 +21,6 @@ spec:
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: hybrid-demo-otel
-  namespace: openshift-gitops
-  annotations:
-    argocd.argoproj.io/sync-wave: "0"
-spec:
-  project: hybrid-demo
-  source:
-    repoURL: https://github.com/jetzlstorfer/hybrid-multi-agents.git
-    targetRevision: HEAD
-    path: gitops/base/otel-collector
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: hybrid-demo
-  syncPolicy:
-    automated: { prune: true, selfHeal: true }
----
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
   name: hybrid-demo-backend
   namespace: openshift-gitops
   annotations:
