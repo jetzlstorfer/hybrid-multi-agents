@@ -21,8 +21,9 @@ WORKDIR /app
 COPY --from=build /wheels /wheels
 RUN pip install --no-cache-dir /wheels/*.whl && rm -rf /wheels
 
-# Default config baked in; overridable via ConfigMap mount.
-COPY models.yaml /app/models.yaml
+# models.yaml is NOT baked into the image — it is injected at runtime via a
+# Kubernetes ConfigMap mounted at /config/models.yaml.  The HYBRID_DEMO_MODELS_FILE
+# env var in the Deployment manifest points the app at that path.
 COPY samples /app/samples
 
 USER 1001
@@ -30,5 +31,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=3s CMD \
   python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=2)" || exit 1
 
-ENV HYBRID_DEMO_MODELS_FILE=/app/models.yaml
 ENTRYPOINT ["uvicorn", "hybrid_demo.ag_ui_server:app", "--host", "0.0.0.0", "--port", "8000"]

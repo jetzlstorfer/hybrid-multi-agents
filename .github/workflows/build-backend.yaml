@@ -6,7 +6,6 @@ on:
     paths:
       - "src/**"
       - "pyproject.toml"
-      - "models.yaml"
       - "docker/backend.Dockerfile"
       - ".github/workflows/build-backend.yaml"
   workflow_dispatch:
