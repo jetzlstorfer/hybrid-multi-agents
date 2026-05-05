@@ -58,11 +58,34 @@ class _OpenAICompatibleEdgeClient:
         response_format: dict | None = None,
     ) -> Any:
         kwargs: dict[str, Any] = {"model": self._model, "messages": messages}
-        kwargs.update(self._options)
+        # Separate standard OpenAI params from llama.cpp/vLLM-specific extensions.
+        # ``enable_thinking`` must travel via ``extra_body`` because the OpenAI
+        # Python client rejects unknown top-level kwargs.
+        _EXTRA_BODY_OPTIONS = {"enable_thinking"}
+        extra_body: dict[str, Any] = {}
+        for key, value in self._options.items():
+            if key in _EXTRA_BODY_OPTIONS:
+                extra_body[key] = value
+            elif key == "extra_body" and isinstance(value, dict):
+                # Already-nested extra_body dict from models.yaml — merge in.
+                extra_body.update(value)
+            else:
+                kwargs[key] = value
         if tools:
             kwargs["tools"] = tools
-        if response_format is not None:
+
+        # When the server is running the model in thinking mode the JSON grammar
+        # constraint (response_format) must NOT be sent: most inference servers
+        # apply the grammar from the very first token, which conflicts with the
+        # leading <think>…</think> block and produces empty or garbled output.
+        # Suppress response_format for the entire request; the system prompts
+        # already instruct the model to return JSON as its final answer.
+        _thinking_on = extra_body.get("enable_thinking", False)
+        if response_format is not None and not _thinking_on:
             kwargs["response_format"] = response_format
+
+        if extra_body:
+            kwargs["extra_body"] = extra_body
 
         try:
             response = self._client.chat.completions.create(**kwargs)
@@ -91,11 +114,20 @@ class _OpenAICompatibleEdgeClient:
 
 
 _THINKING_TAG_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+# Matches an opening <think> tag with no matching closing tag — happens when
+# the token budget is exhausted mid-reasoning so the model never writes </think>.
+_THINKING_OPEN_RE = re.compile(r"<think>.*", re.DOTALL | re.IGNORECASE)
 
 
 def _strip_thinking_tags(text: str) -> str:
-    """Remove ``<think>…</think>`` blocks emitted by reasoning models."""
-    return _THINKING_TAG_RE.sub("", text).strip()
+    """Remove ``<think>…</think>`` blocks emitted by reasoning models.
+
+    Also strips unclosed ``<think>`` blocks caused by token-budget exhaustion
+    so downstream JSON parsing never receives raw reasoning tokens.
+    """
+    result = _THINKING_TAG_RE.sub("", text)
+    result = _THINKING_OPEN_RE.sub("", result)
+    return result.strip()
 
 
 def _is_gateway_timeout_error(exc: Exception) -> bool:

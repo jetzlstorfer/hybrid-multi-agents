@@ -28,3 +28,5 @@ web/.turbo/
 
 # Sample audio is fetched on demand
 samples/audio/
+DEMO.md
+models.yaml
