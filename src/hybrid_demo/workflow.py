@@ -66,9 +66,32 @@ async def _run_stage_with_timeout(
     timeout_seconds: float,
     stage_name: str,
 ):
+    start = asyncio.get_running_loop().time()
+    _log.info(
+        "Workflow %s: stage '%s' started (timeout=%ss)",
+        state.workflow_id,
+        stage_name,
+        int(timeout_seconds),
+    )
     try:
-        return await asyncio.wait_for(asyncio.to_thread(func, state), timeout=timeout_seconds)
+        result = await asyncio.wait_for(asyncio.to_thread(func, state), timeout=timeout_seconds)
+        elapsed = asyncio.get_running_loop().time() - start
+        _log.info(
+            "Workflow %s: stage '%s' finished in %.1fs",
+            state.workflow_id,
+            stage_name,
+            elapsed,
+        )
+        return result
     except TimeoutError as exc:
+        elapsed = asyncio.get_running_loop().time() - start
+        _log.warning(
+            "Workflow %s: stage '%s' timed out after %.1fs (limit=%ss)",
+            state.workflow_id,
+            stage_name,
+            elapsed,
+            int(timeout_seconds),
+        )
         raise TimeoutError(
             f"Stage '{stage_name}' timed out after {int(timeout_seconds)}s. "
             "Please retry with a shorter audio file or check local model runtime health."
@@ -121,13 +144,34 @@ async def _run_remote_cloud_pipeline(
             json=state.handover.model_dump(),
             headers=headers,
         ) as response:
-            payload = await response.json()
             if response.status >= 400:
-                message = payload.get("detail") if isinstance(payload, dict) else None
+                raw = await response.text()
+                message: str | None = None
+                try:
+                    try:
+                        payload = await response.json(content_type=None)
+                    except TypeError:
+                        payload = await response.json()
+                    if isinstance(payload, dict):
+                        detail = payload.get("detail")
+                        if detail is not None:
+                            message = str(detail)
+                except Exception:
+                    pass
+
+                if message is None and raw:
+                    # Keep error concise while still exposing ingress/router cause.
+                    message = raw.strip().replace("\n", " ")[:240]
+
                 raise RuntimeError(
                     f"Remote cloud backend returned HTTP {response.status}"
                     + (f": {message}" if message else "")
                 )
+
+            try:
+                payload = await response.json(content_type=None)
+            except TypeError:
+                payload = await response.json()
     return CloudExecutionResponse.model_validate(payload)
 
 
