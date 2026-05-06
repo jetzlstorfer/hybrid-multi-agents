@@ -20,11 +20,13 @@ _cloud_lock = Lock()
 _local_audio_client: Any = None
 _local_chat_client: Any = None
 _cloud_chat_client: Any = None
+_cloud_credential: Any = None
 
 # Cache keyed by role for openai-compatible singletons (thread-safe enough for
 # our single-worker demo; extend with per-key locks if needed).
 _openai_edge_clients: dict[str, Any] = {}
 _openai_cloud_clients: dict[str, Any] = {}
+_foundry_cloud_clients: dict[str, Any] = {}
 
 
 # ---------- OpenAI-compatible edge wrapper ----------
@@ -362,6 +364,57 @@ def _make_openai_cloud_client(spec: "config.ModelSpec") -> Any:
     return OpenAIChatCompletionClient(model=spec.model, base_url=endpoint, api_key=api_key)
 
 
+def _get_cloud_credential() -> Any:
+    """Return an Azure credential suitable for in-cluster Foundry access.
+
+    Preference order for ARO/AKS-style deployments:
+    1. Workload identity when the federated token file and required env vars exist
+    2. Managed identity (user-assigned when AZURE_CLIENT_ID is set)
+
+    We intentionally do NOT fall back to AzureCliCredential here because the
+    cloud backend runs in a container where the Azure CLI is not available.
+    """
+    global _cloud_credential
+    if _cloud_credential is not None:
+        return _cloud_credential
+
+    from azure.identity import (
+        ChainedTokenCredential,
+        ManagedIdentityCredential,
+        WorkloadIdentityCredential,
+    )
+
+    client_id = os.environ.get("AZURE_CLIENT_ID") or None
+    tenant_id = os.environ.get("AZURE_TENANT_ID") or None
+    federated_token_file = os.environ.get("AZURE_FEDERATED_TOKEN_FILE") or None
+
+    credentials: list[Any] = []
+    if federated_token_file and client_id and tenant_id:
+        credentials.append(
+            WorkloadIdentityCredential(
+                tenant_id=tenant_id,
+                client_id=client_id,
+                token_file_path=federated_token_file,
+            )
+        )
+        _log.info("Cloud Foundry auth configured for Azure workload identity.")
+    elif federated_token_file:
+        _log.warning(
+            "AZURE_FEDERATED_TOKEN_FILE is set but AZURE_CLIENT_ID or AZURE_TENANT_ID "
+            "is missing; skipping WorkloadIdentityCredential."
+        )
+
+    if client_id:
+        credentials.append(ManagedIdentityCredential(client_id=client_id))
+    else:
+        credentials.append(ManagedIdentityCredential())
+
+    _cloud_credential = (
+        credentials[0] if len(credentials) == 1 else ChainedTokenCredential(*credentials)
+    )
+    return _cloud_credential
+
+
 # ---------- Cloud (Microsoft Foundry / OpenAI-compatible) ----------
 
 
@@ -385,27 +438,40 @@ def get_cloud_chat_client(role: str = "cloud.research"):
             _log.info("Created openai-compatible cloud client: role=%s model=%s", role, spec.model)
         return _openai_cloud_clients[role]
 
+    if role in _foundry_cloud_clients:
+        return _foundry_cloud_clients[role]
+
     endpoint = spec.endpoint() or os.environ.get("FOUNDRY_PROJECT_ENDPOINT")
     if not endpoint:
         raise RuntimeError(
             f"Role {role!r} requires {spec.endpoint_env or 'FOUNDRY_PROJECT_ENDPOINT'}."
         )
 
-    from agent_framework.foundry import FoundryChatClient
-    from azure.identity import AzureCliCredential
+    with _cloud_lock:
+        if role in _foundry_cloud_clients:
+            return _foundry_cloud_clients[role]
 
-    return FoundryChatClient(
-        project_endpoint=endpoint,
-        model=spec.model,
-        credential=AzureCliCredential(),
-    )
+        from agent_framework.foundry import FoundryChatClient
+
+        client = FoundryChatClient(
+            project_endpoint=endpoint,
+            model=spec.model,
+            credential=_get_cloud_credential(),
+        )
+        _foundry_cloud_clients[role] = client
+        _log.info("Created Foundry cloud client: role=%s model=%s", role, spec.model)
+    return _foundry_cloud_clients[role]
 
 
 def unload() -> None:
     """Release loaded local models. Safe to call multiple times."""
-    global _local_audio_client, _local_chat_client
+    global _local_audio_client, _local_chat_client, _cloud_credential
     _close_if_supported(_local_audio_client)
     _close_if_supported(_local_chat_client)
+    for client in _openai_cloud_clients.values():
+        _close_if_supported(client)
+    for client in _foundry_cloud_clients.values():
+        _close_if_supported(client)
 
     try:
         from foundry_local_sdk import FoundryLocalManager
@@ -424,3 +490,6 @@ def unload() -> None:
         pass
     _local_audio_client = None
     _local_chat_client = None
+    _cloud_credential = None
+    _openai_cloud_clients.clear()
+    _foundry_cloud_clients.clear()
