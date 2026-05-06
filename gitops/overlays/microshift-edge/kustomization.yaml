@@ -17,7 +17,7 @@ images:
   newTag: sha-afa1c67cba3385fd7fba4254290b86b5197f3576
 - name: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend
   newName: ghcr.io/jetzlstorfer/hybrid-multi-agents/backend
-  newTag: sha-678e360ddea92e1083a578ae83046cff3474a1ef
+  newTag: sha-345ce8c8bb383b84ce96a37fe099d6d8abf5e658
 
   # MicroShift is single-node: no PDBs, no anti-affinity, replicas pinned to 1.
 patches:
