@@ -10,6 +10,7 @@ import os
 import re
 from threading import Lock
 from typing import Any
+from urllib.parse import urlparse
 
 from . import config
 
@@ -27,6 +28,82 @@ _cloud_credential: Any = None
 _openai_edge_clients: dict[str, Any] = {}
 _openai_cloud_clients: dict[str, Any] = {}
 _foundry_cloud_clients: dict[str, Any] = {}
+
+
+def _masked_endpoint(value: str | None) -> str:
+    """Return a scrubbed endpoint string safe for logs."""
+    if not value:
+        return "<unset>"
+    try:
+        parsed = urlparse(value)
+    except Exception:
+        return "<invalid-url>"
+    host = parsed.hostname or "<no-host>"
+    path = parsed.path or ""
+    return f"{parsed.scheme}://{host}{path}"
+
+
+def _env_state(name: str) -> str:
+    """Compact env var state for startup diagnostics."""
+    value = os.environ.get(name)
+    if value is None:
+        return "unset"
+    if not value:
+        return "set(empty)"
+    return "set"
+
+
+def log_startup_diagnostics() -> None:
+    """Emit verbose startup diagnostics for deployment/model/auth wiring."""
+    mode = config.deployment_mode()
+    models_file = os.environ.get("HYBRID_DEMO_MODELS_FILE", "models.yaml")
+    _log.info("Startup diagnostics: deployment_mode=%s", mode)
+    _log.info("Startup diagnostics: HYBRID_DEMO_MODELS_FILE=%s", models_file)
+    _log.info(
+        "Startup diagnostics: env states: "
+        "FOUNDRY_PROJECT_ENDPOINT=%s "
+        "AZURE_CLIENT_ID=%s "
+        "AZURE_TENANT_ID=%s "
+        "AZURE_FEDERATED_TOKEN_FILE=%s "
+        "APPLICATIONINSIGHTS_CONNECTION_STRING=%s",
+        _env_state("FOUNDRY_PROJECT_ENDPOINT"),
+        _env_state("AZURE_CLIENT_ID"),
+        _env_state("AZURE_TENANT_ID"),
+        _env_state("AZURE_FEDERATED_TOKEN_FILE"),
+        _env_state("APPLICATIONINSIGHTS_CONNECTION_STRING"),
+    )
+
+    token_file = os.environ.get("AZURE_FEDERATED_TOKEN_FILE")
+    if token_file:
+        _log.info(
+            "Startup diagnostics: federated token file path=%s exists=%s",
+            token_file,
+            os.path.exists(token_file),
+        )
+
+    role_names = (
+        "edge.transcription",
+        "edge.slm",
+        "cloud.research",
+        "cloud.explanation",
+    )
+    for role in role_names:
+        try:
+            spec = config.get_model(role)
+            endpoint = spec.endpoint() or os.environ.get("FOUNDRY_PROJECT_ENDPOINT")
+            endpoint_source = (
+                f"models:{spec.endpoint_env}" if spec.endpoint() else "env:FOUNDRY_PROJECT_ENDPOINT"
+            )
+            _log.info(
+                "Startup diagnostics: role=%s provider=%s model=%s endpoint_source=%s endpoint=%s",
+                role,
+                spec.provider,
+                spec.model,
+                endpoint_source,
+                _masked_endpoint(endpoint),
+            )
+        except Exception as exc:
+            _log.exception("Startup diagnostics: failed to resolve role=%s: %s", role, exc)
 
 
 # ---------- OpenAI-compatible edge wrapper ----------

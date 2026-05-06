@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse
 from opentelemetry import trace
 from sse_starlette.sse import EventSourceResponse
 
-from . import config, telemetry
+from . import config, runtime, telemetry
 from .cloud.explanation_agent import explain
 from .cloud.research_agent import research
 from .contracts import CloudExecutionResponse, HandoverPackage, WorkflowState
@@ -49,6 +49,7 @@ _SENTINEL = object()
 @asynccontextmanager
 async def _lifespan(app: FastAPI):  # noqa: ARG001
     telemetry.init_tracing()
+    runtime.log_startup_diagnostics()
     yield
     telemetry.shutdown_tracing()
 
