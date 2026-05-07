@@ -80,7 +80,7 @@ metadata:
     # 3-minute timeout for long-running Foundry model inference calls
     haproxy.router.openshift.io/timeout: 180s
 spec:
-  host: web-hybrid-demo.apps.openshift.ph-bergsmann.com
+  host: cloud-backend-hybrid-demo-cloud.apps.aros5iu.austriaeast.aroapp.io
   to: { kind: Service, name: cloud-backend }
   port: { targetPort: http }
   tls:
