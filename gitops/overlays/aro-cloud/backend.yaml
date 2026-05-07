@@ -79,10 +79,8 @@ metadata:
   annotations:
     # 3-minute timeout for long-running Foundry model inference calls
     haproxy.router.openshift.io/timeout: 180s
-  labels:
-    expose-external: "true"
 spec:
-  host: web-hybrid-demo.apps.ext.openshift.ph-bergsmann.com
+  host: web-hybrid-demo.apps.openshift.ph-bergsmann.com
   to: { kind: Service, name: cloud-backend }
   port: { targetPort: http }
   tls:
