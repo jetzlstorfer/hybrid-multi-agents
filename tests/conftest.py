@@ -1,4 +1,4 @@
-"""Pytest configuration: ensure the in-repo models.yaml is used."""
+"""Pytest configuration: ensure tests use the in-repo example model registry."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-os.environ.setdefault("HYBRID_DEMO_MODELS_FILE", str(ROOT / "models.yaml"))
+os.environ.setdefault("HYBRID_DEMO_MODELS_FILE", str(ROOT / "models.yaml.example"))
 os.environ.setdefault("FOUNDRY_PROJECT_ENDPOINT", "http://test.invalid")
 
 # Make `import hybrid_demo` work without `pip install -e .` for fast iteration.
