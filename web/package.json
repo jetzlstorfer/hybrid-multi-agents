@@ -15,7 +15,7 @@
     "@copilotkit/react-core": "^1.5.0",
     "@copilotkit/react-ui": "^1.5.0",
     "@ag-ui/client": "^0.0.53",
-    "next": "16.2.4",
+    "next": "16.2.6",
     "react": "19.2.5",
     "react-dom": "19.2.5"
   },
