@@ -169,8 +169,7 @@ async def _complete_chat_json(agent: object, user_text: str) -> dict:
             repaired = await _complete_chat_raw(repair_agent, raw)
             return _parse_llm_json(repaired)
         except json.JSONDecodeError:
-            import logging
-            logging.getLogger(__name__).warning(
+            _log.warning(
                 "PII agent: could not parse SLM JSON after repair; "
                 "treating chunk as having no entities. Raw response: %r", raw[:200]
             )

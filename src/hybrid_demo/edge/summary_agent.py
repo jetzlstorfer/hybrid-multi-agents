@@ -231,7 +231,8 @@ async def _slm_summary_chunk(agent: object, redacted_text: str, *, _attempt: int
                 "Expected JSON object", raw, start) from exc
         if isinstance(parsed, dict):
             return parsed
-        raise json.JSONDecodeError("Expected JSON object", raw, start)
+        raise json.JSONDecodeError(
+            "Expected JSON object", raw, start) from None
 
 
 @traced_step(

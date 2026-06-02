@@ -535,7 +535,7 @@ def get_cloud_chat_client(role: str = "cloud.research"):
         if role in _foundry_cloud_clients:
             return _foundry_cloud_clients[role]
 
-        from agent_framework.foundry import FoundryChatClient
+        from agent_framework_foundry import FoundryChatClient
 
         client = FoundryChatClient(
             project_endpoint=endpoint,
@@ -565,16 +565,20 @@ def _strip_thinking_middleware():
     :class:`_OpenAICompatibleEdgeClient` so downstream JSON parsing keeps
     working unchanged.
     """
-    from agent_framework import TextContent
+    from agent_framework._types import Content  # noqa: PLC0415
 
-    async def middleware(context, next):  # type: ignore[no-untyped-def]
-        await next(context)
+    async def middleware(context, call_next):  # type: ignore[no-untyped-def]
+        await call_next(context)
         response = getattr(context, "result", None)
         if response is None:
             return
         for message in getattr(response, "messages", []) or []:
             for content in getattr(message, "contents", []) or []:
-                if isinstance(content, TextContent) and content.text:
+                if (
+                    isinstance(content, Content)
+                    and content.type in ("text", "text_reasoning")
+                    and content.text
+                ):
                     content.text = _strip_thinking_tags(content.text)
 
     return middleware
