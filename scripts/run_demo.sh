@@ -2,8 +2,8 @@
 # One-command launcher for the hybrid multi-agent demo.
 #
 # What this script does:
-#   1. Checks prerequisites (Python venv, Node, foundry-local-sdk).
-#   2. Pre-downloads the SLM (phi-4-mini) via foundry-local-sdk.
+#   1. Checks prerequisites (Python venv, Node, Foundry Local runtime).
+#   2. Pre-downloads the SLM (phi-4-mini) via foundry-local-sdk when available.
 #      Whisper is handled by faster-whisper (downloads from Hugging Face on
 #      first use; cached in ~/.cache/huggingface/).
 #   3. Starts the FastAPI backend (port 8000) and Next.js dev server (port 3000).
@@ -44,8 +44,56 @@ info "Using Python interpreter: $PYTHON_BIN"
 if ! "$PYTHON_BIN" -c "import hybrid_demo" 2>/dev/null; then
   die "hybrid_demo package not found in $PYTHON_BIN. Run: $PYTHON_BIN -m pip install -e '.[local,dev]'"
 fi
-if ! "$PYTHON_BIN" -c "import foundry_local_sdk" 2>/dev/null; then
-  die "foundry-local-sdk not installed. Install with: $PYTHON_BIN -m pip install -e '.[local]'"
+if ! "$PYTHON_BIN" - <<'PYEOF' 2>/dev/null
+import importlib.util
+
+def has(name: str) -> bool:
+    return importlib.util.find_spec(name) is not None
+
+# Newer stacks expose foundry_local/foundry_local_core (and AF wrapper),
+# while older stacks exposed foundry_local_sdk.
+if not any(
+    has(name)
+    for name in (
+        "foundry_local_sdk",
+        "foundry_local",
+        "agent_framework_foundry_local",
+    )
+):
+    raise SystemExit(1)
+PYEOF
+then
+  die "Foundry Local runtime packages not found. Install with: $PYTHON_BIN -m pip install -e '.[local]'"
+fi
+
+# If the edge SLM is configured to use Foundry Local, ensure the native
+# Foundry runtime/CLI is actually installed and discoverable.
+if ! "$PYTHON_BIN" - <<'PYEOF'
+import sys
+from pathlib import Path
+import yaml
+
+cfg = yaml.safe_load(Path("models.yaml").read_text())
+slm_provider = (cfg.get("edge", {}).get("slm", {}) or {}).get("provider", "foundry-local")
+if slm_provider != "foundry-local":
+  sys.exit(0)
+
+try:
+  from foundry_local.service import assert_foundry_installed
+except Exception:
+  # Older packages might not expose this helper; skip strict validation.
+  sys.exit(0)
+
+try:
+  assert_foundry_installed()
+except Exception as exc:
+  print(f"[demo]   foundry-local preflight failed: {exc}", flush=True)
+  print("[demo]   install Foundry Local and ensure its binary is on PATH,", flush=True)
+  print("[demo]   or switch edge.slm.provider to openai-compatible in models.yaml.", flush=True)
+  sys.exit(1)
+PYEOF
+then
+  die "Foundry Local runtime is unavailable for provider=foundry-local."
 fi
 
 # ── Foundry Local model pre-download ─────────────────────────────────────────
@@ -59,7 +107,7 @@ else
   info "Transcription backend: foundry"
 fi
 
-info "Pre-warming edge models via foundry-local-sdk (skipped for openai-compatible providers)..."
+info "Pre-warming edge models (skipped for openai-compatible providers)..."
 if ! "$PYTHON_BIN" - <<'PYEOF'
 import sys, os
 import yaml
@@ -89,10 +137,13 @@ if not models_to_warm:
     sys.exit(0)
 
 try:
-    from foundry_local_sdk import Configuration, FoundryLocalManager
+  from foundry_local_sdk import Configuration, FoundryLocalManager
 except ImportError:
-    print("[demo] foundry-local-sdk not importable.", flush=True)
-    sys.exit(1)
+  # Newer Foundry Local Python packages may not expose this legacy import.
+  # Runtime inference still works via agent-framework-foundry-local, so this
+  # pre-warm step becomes optional.
+  print("[demo]   skipping pre-warm: foundry_local_sdk import is unavailable in this environment.", flush=True)
+  sys.exit(0)
 
 if FoundryLocalManager.instance is None:
     FoundryLocalManager.initialize(Configuration(app_name="hybrid_demo"))

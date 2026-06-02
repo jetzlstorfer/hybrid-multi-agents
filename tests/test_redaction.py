@@ -63,22 +63,23 @@ def _state_with_entities(text: str, entities: list[Entity]) -> WorkflowState:
 def test_redaction_is_deterministic(monkeypatch):
     text = "Ich bin Anna Müller, 42, aus Wien."
 
-    def fake_slm(segment: str, _entities: list[Entity]) -> str:
+    async def fake_slm(segment: str, _entities: list[Entity]) -> str:
         return segment.replace("Anna Müller", "[PATIENT_FIRST_NAME] [PATIENT_LAST_NAME]")
 
     import hybrid_demo.edge.redaction_agent as redaction_agent
+    import asyncio
 
     monkeypatch.setattr(redaction_agent, "_redact_segment_with_slm", fake_slm)
 
-    a = redact(_state(text))
-    b = redact(_state(text))
+    a = asyncio.run(redact(_state(text)))
+    b = asyncio.run(redact(_state(text)))
     assert a.redacted_segments[0].text == b.redacted_segments[0].text
 
 
 def test_quasi_identifiers_are_generalised(monkeypatch):
     text = "Ich bin Anna Müller, 42, aus Wien und habe Atemnot."
 
-    def fake_slm(segment: str, _entities: list[Entity]) -> str:
+    async def fake_slm(segment: str, _entities: list[Entity]) -> str:
         out = segment
         out = out.replace(
             "Anna Müller", "[PATIENT_FIRST_NAME] [PATIENT_LAST_NAME]")
@@ -87,10 +88,11 @@ def test_quasi_identifiers_are_generalised(monkeypatch):
         return out
 
     import hybrid_demo.edge.redaction_agent as redaction_agent
+    import asyncio
 
     monkeypatch.setattr(redaction_agent, "_redact_segment_with_slm", fake_slm)
 
-    out = redact(_state(text))
+    out = asyncio.run(redact(_state(text)))
     redacted_text = out.redacted_segments[0].text
     assert "Anna Müller" not in redacted_text
     assert "[PATIENT_FIRST_NAME] [PATIENT_LAST_NAME]" in redacted_text
@@ -111,17 +113,18 @@ def test_redacts_repeated_name_mentions_and_keeps_timestamp_context(monkeypatch)
                placeholder="[TIMESTAMP]"),
     ]
 
-    def fake_slm(segment: str, _entities: list[Entity]) -> str:
+    async def fake_slm(segment: str, _entities: list[Entity]) -> str:
         out = segment
         out = out.replace(
             "Paul Gerster", "[PATIENT_FIRST_NAME] [PATIENT_LAST_NAME]")
         return out
 
     import hybrid_demo.edge.redaction_agent as redaction_agent
+    import asyncio
 
     monkeypatch.setattr(redaction_agent, "_redact_segment_with_slm", fake_slm)
 
-    out = redact(_state_with_entities(text, entities))
+    out = asyncio.run(redact(_state_with_entities(text, entities)))
     redacted_text = out.redacted_segments[0].text
 
     assert "Paul Gerster" not in redacted_text
@@ -135,14 +138,15 @@ def test_redacts_repeated_name_mentions_and_keeps_timestamp_context(monkeypatch)
 def test_slm_exception_falls_back_to_deterministic_redaction(monkeypatch):
     text = "Ich bin Anna Müller und wohne in Wien."
 
-    def failing_slm(_segment: str, _entities: list[Entity]) -> str:
+    async def failing_slm(_segment: str, _entities: list[Entity]) -> str:
         raise RuntimeError("Operation was cancelled")
 
     import hybrid_demo.edge.redaction_agent as redaction_agent
+    import asyncio
 
     monkeypatch.setattr(redaction_agent, "_redact_chunk_with_slm", failing_slm)
 
-    out = redact(_state(text))
+    out = asyncio.run(redact(_state(text)))
     redacted_text = out.redacted_segments[0].text
     assert "Anna Müller" not in redacted_text
     assert "[PATIENT_FIRST_NAME] [PATIENT_LAST_NAME]" in redacted_text

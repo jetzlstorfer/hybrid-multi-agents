@@ -125,7 +125,7 @@ def _chunk_text(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
-def _redact_segment_with_slm(text: str, entities: list[Entity]) -> str:
+async def _redact_segment_with_slm(text: str, entities: list[Entity]) -> str:
     """Delegate replacement behavior to the local SLM.
 
     Long segments are split into chunks that fit within the model's context
@@ -139,7 +139,7 @@ def _redact_segment_with_slm(text: str, entities: list[Entity]) -> str:
     redacted_chunks: list[str] = []
     for idx, chunk in enumerate(chunks, start=1):
         try:
-            redacted_chunks.append(_redact_chunk_with_slm(chunk, entities))
+            redacted_chunks.append(await _redact_chunk_with_slm(chunk, entities))
         except Exception as exc:
             _log.warning(
                 "Redaction agent: SLM call failed for chunk %s/%s; using deterministic fallback. Error: %s",
@@ -152,7 +152,7 @@ def _redact_segment_with_slm(text: str, entities: list[Entity]) -> str:
     return " ".join(redacted_chunks)
 
 
-def _redact_chunk_with_slm(text: str, entities: list[Entity]) -> str:
+async def _redact_chunk_with_slm(text: str, entities: list[Entity]) -> str:
     from .. import runtime
 
     replacements: list[dict[str, str]] = []
@@ -178,22 +178,15 @@ def _redact_chunk_with_slm(text: str, entities: list[Entity]) -> str:
         "replacements": replacements,
     }
 
-    client = runtime.get_local_chat_client()
-    messages = [
-        {"role": "system", "content": _REDACTION_SYSTEM_PROMPT},
-        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-    ]
+    agent = runtime.get_local_agent(
+        "edge.slm",
+        name="EdgeRedactionAgent",
+        instructions=_REDACTION_SYSTEM_PROMPT,
+        response_format={"type": "json_object"},
+    )
+    response = await agent.run(json.dumps(payload, ensure_ascii=False))
 
-    if hasattr(client, "complete_chat"):
-        response = client.complete_chat(messages=messages)
-    else:
-        response = client.complete(
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.0,
-        )
-
-    raw = response.choices[0].message.content or "{}"
+    raw = response.text or "{}"
     try:
         parsed = _parse_redaction_json(raw)
         out = str(parsed.get("redacted_text", "")).strip()
@@ -296,7 +289,7 @@ def _build_vault_mapping(entities: list[Entity]) -> dict[str, str]:
     input_classification="raw_transcript",
     output_classification="redacted_transcript",
 )
-def redact(state: WorkflowState) -> RedactedTranscript:
+async def redact(state: WorkflowState) -> RedactedTranscript:
     transcript: Transcript = state.transcript  # type: ignore[assignment]
     # type: ignore[assignment]
     sensitivity: SensitivityReport = state.sensitivity
@@ -307,16 +300,14 @@ def redact(state: WorkflowState) -> RedactedTranscript:
     if vault_map:
         vault.store(state.workflow_id, vault_map)
 
-    redacted_segments = [
-        TranscriptSegment(
-            speaker=seg.speaker,
-            text=_enforce_direct_identifier_redaction(
-                _redact_segment_with_slm(seg.text, sensitivity.entities),
-                sensitivity.entities,
-            ),
+    redacted_segments: list[TranscriptSegment] = []
+    for seg in transcript.segments:
+        slm_text = await _redact_segment_with_slm(seg.text, sensitivity.entities)
+        enforced = _enforce_direct_identifier_redaction(
+            slm_text, sensitivity.entities)
+        redacted_segments.append(
+            TranscriptSegment(speaker=seg.speaker, text=enforced)
         )
-        for seg in transcript.segments
-    ]
 
     return RedactedTranscript(
         workflow_id=state.workflow_id,

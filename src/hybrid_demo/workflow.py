@@ -66,6 +66,7 @@ async def _run_stage_with_timeout(
     timeout_seconds: float,
     stage_name: str,
 ):
+    import inspect
     start = asyncio.get_running_loop().time()
     _log.info(
         "Workflow %s: stage '%s' started (timeout=%ss)",
@@ -74,7 +75,12 @@ async def _run_stage_with_timeout(
         int(timeout_seconds),
     )
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(func, state), timeout=timeout_seconds)
+        if inspect.iscoroutinefunction(func):
+            result = await asyncio.wait_for(func(state), timeout=timeout_seconds)
+        else:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(func, state), timeout=timeout_seconds
+            )
         elapsed = asyncio.get_running_loop().time() - start
         _log.info(
             "Workflow %s: stage '%s' finished in %.1fs",

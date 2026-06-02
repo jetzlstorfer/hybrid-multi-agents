@@ -1017,7 +1017,57 @@ tests/                   # Policy, redaction, config, end-to-end invariants
 scripts/                 # fetch_sample_audio.py, run_demo.sh
 ```
 
-### 2. Configure models
+### 2. Version and Dependencies
+
+| Component              | Version | Required | Notes                                                  |
+|------------------------|---------|----------|--------------------------------------------------------|
+| Agent Framework Core   | 1.7.0   | Yes      | Primary orchestration and async boundary              |
+| Agent Framework Foundry | 1.7.0  | Yes      | Cloud (Foundry/openai-compatible) integration          |
+| Foundry Local SDK      | ≥0.5.1  | Optional | Enables edge.slm.provider=foundry-local (in-container) |
+| Agent Framework Foundry Local | 1.0.0b260521+ | Optional | Python SDK wrapper for Foundry Local via Agent Framework |
+| Faster Whisper         | ≥1.0.0  | Optional | Edge audio transcription (edge.transcription provider)  |
+| FastAPI                | ≥0.115  | Yes      | Backend HTTP server (SSE + /run endpoint)              |
+| Azure Identity         | ≥1.18   | Yes      | Workload identity for cloud Foundry agents             |
+| Azure Monitor OTel     | ≥1.6.0  | Yes      | Application Insights telemetry export                  |
+| Pydantic               | ≥2.7    | Yes      | Data contract validation (PII, redaction, handover)    |
+
+#### Edge SLM Provider Options
+
+**Option 1: foundry-local (in-container)**
+
+Requires Foundry Local runtime installed and running in the container. Best for production edge runtimes with dedicated Foundry deployment.
+
+```yaml
+# models.yaml
+edge:
+  slm:
+    provider: foundry-local
+    model: phi-4-mini
+```
+
+**Option 2: openai-compatible (remote endpoint)**
+
+Points to a remote OpenAI-compatible endpoint. Useful for dev/test or when Foundry Local is unavailable in the container (e.g., running on host).
+
+```yaml
+# models.yaml
+edge:
+  slm:
+    provider: openai-compatible
+    base_url: http://host.docker.internal:57280/v1  # or your endpoint
+    model: phi-4-mini
+```
+
+On Docker Desktop, use `host.docker.internal` to reach host services. To find your Foundry service port:
+
+```powershell
+# On host PowerShell where Foundry is running
+foundry service status  # Shows http://127.0.0.1:<PORT>/
+
+# Update models.yaml base_url to match the port
+```
+
+### 3. Configure models
 
 All model identifiers live in `models.yaml` and can be overridden via env vars
 that follow the pattern `HYBRID_DEMO__<section>__<role>__<field>`.
@@ -1027,7 +1077,7 @@ that follow the pattern `HYBRID_DEMO__<section>__<role>__<field>`.
 export HYBRID_DEMO__EDGE__SLM__MODEL=phi-4-reasoning
 ```
 
-### 3. Local prerequisites
+### 4. Local prerequisites
 
 ```bash
 # Python
@@ -1047,7 +1097,7 @@ export FOUNDRY_PROJECT_ENDPOINT="https://<your-foundry-project>.services.ai.azur
 export APPLICATIONINSIGHTS_CONNECTION_STRING="InstrumentationKey=...;..."
 ```
 
-### 4. Run the demo
+### 5. Run the demo
 
 ```bash
 hybrid-demo-server              # http://localhost:8000
@@ -1063,7 +1113,7 @@ edge / cloud / gate runtime badges.
 The backend is fail-fast: an audio file is required for each run and model/
 cloud failures are surfaced as errors (no runtime fallback responses).
 
-### 5. Tests
+### 6. Tests
 
 ```bash
 pytest -q
@@ -1087,7 +1137,7 @@ Run live SLM integration tests explicitly:
 RUN_SLM_INTEGRATION=1 pytest -q tests/test_redaction_integration.py
 ```
 
-### 6. Container images
+### 7. Container images
 
 Multi-arch images are pushed to GHCR by `.github/workflows/build-backend.yaml`
 and `build-web.yaml`. After each successful build, `gitops-bump.yaml` opens a
@@ -1101,7 +1151,7 @@ ghcr.io/<owner>/hybrid-multi-agents/web:sha-<commit>
 
 Override the namespace via the `IMAGE_NAMESPACE` repo variable.
 
-### 7. Deploy on MicroShift via Argo CD
+### 8. Deploy on MicroShift via Argo CD
 
 Foundry Local stays on the host and is exposed to the cluster via an
 `ExternalName` Service pointing at `host.containers.internal:5273`.
@@ -1124,7 +1174,7 @@ Sync waves drive ordering:
 Routes are TLS-edge by default. Telemetry flows backend → OTel Collector →
 Application Insights via the `azuremonitor` exporter.
 
-### 8. The "story" stages emitted on the wire
+### 9. The "story" stages emitted on the wire
 
 ```
 stage.transcript     edge  whisper-large-v3-turbo (Foundry Local)

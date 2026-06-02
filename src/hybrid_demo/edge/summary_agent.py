@@ -157,7 +157,7 @@ def _merge_parsed(results: list[dict]) -> dict:
     return merged
 
 
-def _slm_summary(redacted_text: str) -> dict:
+async def _slm_summary(redacted_text: str) -> dict:
     import os
     from .. import runtime
 
@@ -168,18 +168,23 @@ def _slm_summary(redacted_text: str) -> dict:
     chunk_size = int(os.environ.get("HYBRID_DEMO_SUMMARY_CHUNK_CHARS", "600"))
     chunks = _chunk_text(redacted_text, chunk_size)
 
-    client = runtime.get_local_chat_client()
+    agent = runtime.get_local_agent(
+        "edge.slm",
+        name="EdgeSummaryAgent",
+        instructions=_SUMMARY_SYSTEM_PROMPT,
+        response_format={"type": "json_object"},
+    )
     results: list[dict] = []
     for chunk in chunks:
-        results.append(_slm_summary_chunk(client, chunk))
+        results.append(await _slm_summary_chunk(agent, chunk))
 
     if len(results) == 1:
         return results[0]
     return _merge_parsed(results)
 
 
-def _slm_summary_chunk(client: object, redacted_text: str, *, _attempt: int = 1) -> dict:
-    """Call the local SLM for one chunk, retrying once on transient cancellation.
+async def _slm_summary_chunk(agent: object, redacted_text: str, *, _attempt: int = 1) -> dict:
+    """Call the local SLM via the Agent Framework, retrying once on transient cancellation.
 
     The Foundry Local native library enforces a ~120 s per-request timeout.
     When the model is slow (cold start, CPU-only), it may cancel mid-flight
@@ -189,19 +194,8 @@ def _slm_summary_chunk(client: object, redacted_text: str, *, _attempt: int = 1)
     import logging
     _chunk_log = logging.getLogger(__name__)
 
-    messages = [
-        {"role": "system", "content": _SUMMARY_SYSTEM_PROMPT},
-        {"role": "user", "content": redacted_text},
-    ]
     try:
-        if hasattr(client, "complete_chat"):
-            response = client.complete_chat(messages=messages)
-        else:
-            response = client.complete(
-                messages=messages,
-                response_format={"type": "json_object"},
-                temperature=0.1,
-            )
+        response = await agent.run(redacted_text)
     except Exception as exc:
         # Retry once on transient "Operation was cancelled" from the native
         # Foundry Local library (its internal ~120 s inference timeout).
@@ -211,12 +205,10 @@ def _slm_summary_chunk(client: object, redacted_text: str, *, _attempt: int = 1)
             _chunk_log.warning(
                 "Foundry Local cancelled chunk (attempt %d) — retrying: %s", _attempt, exc
             )
-            return _slm_summary_chunk(client, redacted_text, _attempt=2)
+            return await _slm_summary_chunk(agent, redacted_text, _attempt=2)
         raise
 
-    raw = _strip_markdown_fences(
-        response.choices[0].message.content or "{}"
-    ).strip()
+    raw = _strip_markdown_fences(response.text or "{}").strip()
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -249,10 +241,10 @@ def _slm_summary_chunk(client: object, redacted_text: str, *, _attempt: int = 1)
     output_classification="cloud_handover_package",
     model_role="edge.slm",
 )
-def summarise(state: WorkflowState) -> HandoverPackage:
+async def summarise(state: WorkflowState) -> HandoverPackage:
     redacted: RedactedTranscript = state.redacted  # type: ignore[assignment]
     text = "\n".join(seg.text for seg in redacted.redacted_segments)
-    parsed = _slm_summary(text)
+    parsed = await _slm_summary(text)
 
     return HandoverPackage(
         workflow_id=state.workflow_id,
