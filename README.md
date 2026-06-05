@@ -108,8 +108,7 @@ flowchart LR
     D --> E[Edge Summary Agent]
     E --> F[Edge Orchestrator]
     F -->|Pseudonymized hand-over package| G[Cloud Research Agent]
-    G --> H[Cloud Medical Reasoning Agent]
-    H --> I[Cloud Explanation Agent]
+    G --> I[Cloud Explanation Agent]
     I -->|Pseudonymized result| F
     F --> J[Edge Rehydration Agent]
     J --> K[Final Response]
@@ -119,7 +118,6 @@ flowchart LR
 
     F --> M[OpenTelemetry]
     G --> M
-    H --> M
     I --> M
 ```
 
@@ -1034,9 +1032,12 @@ export HYBRID_DEMO__EDGE__SLM__MODEL=phi-4-reasoning
 python3.12 -m venv .venv && source .venv/bin/activate
 pip install -e ".[local,dev]"
 
-# Foundry Local (host) — pull the SLM and ASR models referenced in models.yaml
-foundry model download whisper-large-v3-turbo
-foundry model download phi-4
+# Foundry Local (host) — pull the SLM referenced in models.yaml
+# Default transcription backend is faster-whisper (no Foundry model download needed).
+# To use the Foundry Local transcription backend instead, set TRANSCRIPTION_BACKEND=foundry
+# and download the ASR model:
+#   foundry model download whisper-large-v3-turbo
+foundry model download phi-4-mini
 foundry service start
 
 # Cloud auth for the Foundry-hosted GPT-class agents
@@ -1127,10 +1128,10 @@ Application Insights via the `azuremonitor` exporter.
 ### 8. The "story" stages emitted on the wire
 
 ```
-stage.transcript     edge  whisper-large-v3-turbo (Foundry Local)
-stage.entities       edge  phi-4, SLM-only extraction, clinical signal preserved
+stage.transcript     edge  faster-whisper / small (default); set TRANSCRIPTION_BACKEND=foundry for Foundry Local
+stage.entities       edge  phi-4-mini, SLM-only extraction, clinical signal preserved
 stage.redacted       edge  SLM-driven redaction/transformation + vault.store() for direct identifiers
-stage.handover       edge  phi-4, strict JSON HandoverPackage
+stage.handover       edge  phi-4-mini, strict JSON HandoverPackage
 stage.policy_gate    gate  Pure Python, fails closed
 stage.blocked        gate  (only when the gate denies)
 stage.research       cloud gpt-5.4-mini-1 via FoundryChatClient + AzureCliCredential
