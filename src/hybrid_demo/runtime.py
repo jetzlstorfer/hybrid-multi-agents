@@ -92,7 +92,8 @@ def log_startup_diagnostics() -> None:
             spec = config.get_model(role)
             endpoint = spec.endpoint() or os.environ.get("FOUNDRY_PROJECT_ENDPOINT")
             endpoint_source = (
-                f"models:{spec.endpoint_env}" if spec.endpoint() else "env:FOUNDRY_PROJECT_ENDPOINT"
+                f"models:{spec.endpoint_env}" if spec.endpoint(
+                ) else "env:FOUNDRY_PROJECT_ENDPOINT"
             )
             _log.info(
                 "Startup diagnostics: role=%s provider=%s model=%s endpoint_source=%s endpoint=%s",
@@ -103,7 +104,8 @@ def log_startup_diagnostics() -> None:
                 _masked_endpoint(endpoint),
             )
         except Exception as exc:
-            _log.exception("Startup diagnostics: failed to resolve role=%s: %s", role, exc)
+            _log.exception(
+                "Startup diagnostics: failed to resolve role=%s: %s", role, exc)
 
 
 # ---------- OpenAI-compatible edge wrapper ----------
@@ -179,7 +181,8 @@ class _OpenAICompatibleEdgeClient:
                         "OpenAI-compatible request timed out (504). "
                         "Retrying with tighter token budget."
                     )
-                    response = self._client.chat.completions.create(**retry_kwargs)
+                    response = self._client.chat.completions.create(
+                        **retry_kwargs)
                 else:
                     raise
             else:
@@ -348,7 +351,8 @@ def get_local_chat_client():
                 return _openai_edge_clients[role]
             client = _make_openai_edge_client(spec)
             _openai_edge_clients[role] = client
-            _log.info("Created openai-compatible edge client: model=%s base_url=%s", spec.model, spec.endpoint())
+            _log.info("Created openai-compatible edge client: model=%s base_url=%s",
+                      spec.model, spec.endpoint())
         return _openai_edge_clients[role]
 
     if _local_chat_client is not None:
@@ -417,7 +421,8 @@ def _make_openai_edge_client(spec: "config.ModelSpec") -> _OpenAICompatibleEdgeC
     raw_client = openai.OpenAI(
         base_url=endpoint,
         api_key=api_key,
-        timeout=openai.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0),
+        timeout=openai.Timeout(connect=10.0, read=600.0,
+                               write=30.0, pool=10.0),
     )
     return _OpenAICompatibleEdgeClient(raw_client, spec.model, spec.options)
 
@@ -487,7 +492,8 @@ def _get_cloud_credential() -> Any:
         credentials.append(ManagedIdentityCredential())
 
     _cloud_credential = (
-        credentials[0] if len(credentials) == 1 else ChainedTokenCredential(*credentials)
+        credentials[0] if len(
+            credentials) == 1 else ChainedTokenCredential(*credentials)
     )
     return _cloud_credential
 
@@ -512,7 +518,8 @@ def get_cloud_chat_client(role: str = "cloud.research"):
                 return _openai_cloud_clients[role]
             client = _make_openai_cloud_client(spec)
             _openai_cloud_clients[role] = client
-            _log.info("Created openai-compatible cloud client: role=%s model=%s", role, spec.model)
+            _log.info(
+                "Created openai-compatible cloud client: role=%s model=%s", role, spec.model)
         return _openai_cloud_clients[role]
 
     if role in _foundry_cloud_clients:
@@ -528,7 +535,7 @@ def get_cloud_chat_client(role: str = "cloud.research"):
         if role in _foundry_cloud_clients:
             return _foundry_cloud_clients[role]
 
-        from agent_framework.foundry import FoundryChatClient
+        from agent_framework_foundry import FoundryChatClient
 
         client = FoundryChatClient(
             project_endpoint=endpoint,
@@ -536,8 +543,159 @@ def get_cloud_chat_client(role: str = "cloud.research"):
             credential=_get_cloud_credential(),
         )
         _foundry_cloud_clients[role] = client
-        _log.info("Created Foundry cloud client: role=%s model=%s", role, spec.model)
+        _log.info("Created Foundry cloud client: role=%s model=%s",
+                  role, spec.model)
     return _foundry_cloud_clients[role]
+
+
+# ---------- Local Agent Framework wrappers ----------
+
+#: Cache of agent-framework ``BaseChatClient`` instances for edge roles.
+#: Keys: role string (e.g. ``"edge.slm"``).
+_local_af_clients: dict[str, Any] = {}
+
+
+def _strip_thinking_middleware():
+    """Build a chat middleware that removes ``<think>…</think>`` blocks from
+    assistant responses returned by reasoning-tuned edge SLMs (Qwen3, R1).
+
+    The blocks (and any unclosed opening ``<think>`` when the budget is
+    exhausted mid-reasoning) are stripped in-place from ``TextContent`` parts
+    on the final ``ChatResponse``.  This mirrors the legacy behaviour of
+    :class:`_OpenAICompatibleEdgeClient` so downstream JSON parsing keeps
+    working unchanged.
+    """
+    from agent_framework._types import Content  # noqa: PLC0415
+
+    async def middleware(context, call_next):  # type: ignore[no-untyped-def]
+        await call_next(context)
+        response = getattr(context, "result", None)
+        if response is None:
+            return
+        for message in getattr(response, "messages", []) or []:
+            for content in getattr(message, "contents", []) or []:
+                if (
+                    isinstance(content, Content)
+                    and content.type in ("text", "text_reasoning")
+                    and content.text
+                ):
+                    content.text = _strip_thinking_tags(content.text)
+
+    return middleware
+
+
+def _make_local_af_client(spec: "config.ModelSpec") -> Any:
+    """Construct an agent-framework chat client for the configured edge SLM.
+
+    * ``foundry-local`` provider → :class:`agent_framework_foundry_local.FoundryLocalClient`
+      which bootstraps Foundry Local and connects via its OpenAI-compatible endpoint.
+    * ``openai-compatible`` provider → :class:`agent_framework.openai.OpenAIChatClient`
+      pointed at the supplied ``base_url``/``endpoint_env``.
+    """
+    if spec.provider == "openai-compatible":
+        try:
+            from agent_framework.openai import OpenAIChatClient
+        except ImportError as exc:  # pragma: no cover
+            raise RuntimeError(
+                "agent-framework-openai is required for provider 'openai-compatible'."
+            ) from exc
+
+        endpoint = spec.endpoint()
+        if not endpoint:
+            raise RuntimeError(
+                "provider 'openai-compatible' requires 'base_url' or 'endpoint_env' in models.yaml."
+            )
+        api_key = spec.api_key() or "no-key"
+        return OpenAIChatClient(model_id=spec.model, base_url=endpoint, api_key=api_key)
+
+    # Default: Foundry Local
+    try:
+        from agent_framework_foundry_local import FoundryLocalClient
+    except ImportError as exc:  # pragma: no cover - depends on optional extra
+        raise RuntimeError(
+            "agent-framework-foundry-local is not installed. "
+            "Install with `pip install -e .[local]`."
+        ) from exc
+    return FoundryLocalClient(model=spec.model)
+
+
+def get_local_af_client(role: str = "edge.slm") -> Any:
+    """Return a cached agent-framework chat client for the given edge role."""
+    if role in _local_af_clients:
+        return _local_af_clients[role]
+    with _local_lock:
+        if role in _local_af_clients:
+            return _local_af_clients[role]
+        spec = config.get_model(role)
+        client = _make_local_af_client(spec)
+        _local_af_clients[role] = client
+        _log.info(
+            "Created local AF chat client: role=%s provider=%s model=%s",
+            role,
+            spec.provider,
+            spec.model,
+        )
+    return _local_af_clients[role]
+
+
+def _default_local_options(spec: "config.ModelSpec") -> dict[str, Any]:
+    """Translate ``models.yaml`` options into ChatOptions kwargs the AF client
+    understands.
+
+    Recognised keys: ``temperature``, ``top_p``, ``max_tokens`` (mapped to
+    ``max_output_tokens``). Reasoning toggles such as ``enable_thinking`` are
+    forwarded under ``additional_properties.extra_body`` so OpenAI-compatible
+    servers (llama.cpp, vLLM) receive them in the request body.
+    """
+    out: dict[str, Any] = {}
+    temperature = _as_float(spec.options.get("temperature"))
+    top_p = _as_float(spec.options.get("top_p"))
+    max_tokens = _as_int(spec.options.get("max_tokens"))
+    if temperature is not None:
+        out["temperature"] = temperature
+    if top_p is not None:
+        out["top_p"] = top_p
+    if max_tokens is not None:
+        out["max_output_tokens"] = max_tokens
+
+    extra_body: dict[str, Any] = {}
+    for key in ("enable_thinking",):
+        if key in spec.options:
+            extra_body[key] = spec.options[key]
+    if isinstance(spec.options.get("extra_body"), dict):
+        extra_body.update(spec.options["extra_body"])
+    if extra_body:
+        out["additional_properties"] = {"extra_body": extra_body}
+    return out
+
+
+def get_local_agent(
+    role: str = "edge.slm",
+    *,
+    name: str,
+    instructions: str,
+    response_format: dict | None = None,
+):
+    """Build an :class:`agent_framework.Agent` bound to the edge SLM client.
+
+    Each call returns a fresh agent (cheap wrapper) so callers can specialise
+    ``name``/``instructions``/``response_format`` per stage while sharing the
+    cached underlying chat client.
+    """
+    client = get_local_af_client(role)
+    spec = config.get_model(role)
+    default_options = _default_local_options(spec)
+    if response_format is not None:
+        default_options["response_format"] = response_format
+
+    middleware = [_strip_thinking_middleware()]
+
+    return client.as_agent(
+        name=name,
+        instructions=instructions,
+        default_options=default_options or None,
+        middleware=middleware,
+    )
 
 
 def unload() -> None:
@@ -570,3 +728,6 @@ def unload() -> None:
     _cloud_credential = None
     _openai_cloud_clients.clear()
     _foundry_cloud_clients.clear()
+    for client in _local_af_clients.values():
+        _close_if_supported(client)
+    _local_af_clients.clear()

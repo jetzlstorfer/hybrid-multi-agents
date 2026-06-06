@@ -66,6 +66,7 @@ async def _run_stage_with_timeout(
     timeout_seconds: float,
     stage_name: str,
 ):
+    import inspect
     start = asyncio.get_running_loop().time()
     _log.info(
         "Workflow %s: stage '%s' started (timeout=%ss)",
@@ -74,7 +75,12 @@ async def _run_stage_with_timeout(
         int(timeout_seconds),
     )
     try:
-        result = await asyncio.wait_for(asyncio.to_thread(func, state), timeout=timeout_seconds)
+        if inspect.iscoroutinefunction(func):
+            result = await asyncio.wait_for(func(state), timeout=timeout_seconds)
+        else:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(func, state), timeout=timeout_seconds
+            )
         elapsed = asyncio.get_running_loop().time() - start
         _log.info(
             "Workflow %s: stage '%s' finished in %.1fs",
@@ -183,6 +189,7 @@ async def run_workflow(
     workflow_id: str | None = None,
     transcript_text: str | None = None,
 ) -> AsyncIterator[StageEvent]:
+    """Run the full pipeline and yield stage events as they complete."""
     import os
     # Edge stages (local SLM inference) need more time for CPU-based models.
     # Increase via HYBRID_DEMO_EDGE_TIMEOUT_SECONDS if needed (default 300s).
@@ -199,7 +206,6 @@ async def run_workflow(
     # Override with HYBRID_DEMO_TRANSCRIPTION_TIMEOUT_SECONDS.
     transcription_timeout = float(os.environ.get(
         "HYBRID_DEMO_TRANSCRIPTION_TIMEOUT_SECONDS", "900"))
-    """Run the full pipeline and yield stage events as they complete."""
     workflow_id = workflow_id or f"wf_{uuid.uuid4().hex[:8]}"
     state = WorkflowState(
         workflow_id=workflow_id,

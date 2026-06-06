@@ -49,13 +49,15 @@ def require_live_slm():
     from hybrid_demo import runtime
 
     if not _integration_enabled():
-        pytest.skip("Set RUN_SLM_INTEGRATION=1 to run live SLM integration tests")
+        pytest.skip(
+            "Set RUN_SLM_INTEGRATION=1 to run live SLM integration tests")
 
     # Fail fast when explicitly requested but unavailable/misconfigured.
     try:
         runtime.get_local_chat_client()
     except Exception as exc:  # pragma: no cover
-        pytest.fail(f"RUN_SLM_INTEGRATION=1 but local SLM is unavailable: {exc}")
+        pytest.fail(
+            f"RUN_SLM_INTEGRATION=1 but local SLM is unavailable: {exc}")
 
     yield
 
@@ -75,10 +77,12 @@ def test_live_slm_redacts_repeated_names_and_email():
             value="Paul Gerster",
             placeholder="[PATIENT_FIRST_NAME] [PATIENT_LAST_NAME]",
         ),
-        Entity(type="EMAIL", value="paul.gerster@example.com", placeholder="[EMAIL]"),
+        Entity(type="EMAIL", value="paul.gerster@example.com",
+               placeholder="[EMAIL]"),
     ]
 
-    out = redact(_state(text, entities)).redacted_segments[0].text
+    import asyncio
+    out = asyncio.run(redact(_state(text, entities))).redacted_segments[0].text
 
     assert "Paul Gerster" not in out
     assert "Herr Gerster" not in out
@@ -95,12 +99,14 @@ def test_live_slm_applies_configured_transform_actions():
         Entity(type="LOCATION", value="Wien", placeholder="[LOCATION]"),
     ]
 
-    out = redact(_state(text, entities)).redacted_segments[0].text
+    import asyncio
+    out = asyncio.run(redact(_state(text, entities))).redacted_segments[0].text
     lowered = out.casefold()
 
     # We expect either an actual generalisation or an explicit placeholder
     # replacement, but never an untouched source string for both fields.
-    age_changed = ("42" not in out) or ("[PATIENT_AGE]" in out) or ("age bucket" in lowered)
+    age_changed = ("42" not in out) or (
+        "[PATIENT_AGE]" in out) or ("age bucket" in lowered)
     location_changed = (
         ("wien" not in lowered)
         or ("[LOCATION]" in out)

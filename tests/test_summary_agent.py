@@ -4,7 +4,7 @@ from hybrid_demo.contracts import RedactedTranscript, TranscriptSegment, Workflo
 from hybrid_demo.edge.summary_agent import summarise
 
 
-def test_summary_tolerates_invalid_symptom_items(monkeypatch):
+async def test_summary_tolerates_invalid_symptom_items(monkeypatch):
     state = WorkflowState(workflow_id="wf_test")
     state.redacted = RedactedTranscript(
         workflow_id="wf_test",
@@ -13,7 +13,7 @@ def test_summary_tolerates_invalid_symptom_items(monkeypatch):
             speaker="unknown", text="Patient reports chest pain")],
     )
 
-    def fake_slm_summary(_text: str):
+    async def fake_slm_summary(_text: str):
         return {
             "patient_context": {},
             "chief_complaint": "chest pain",
@@ -32,7 +32,7 @@ def test_summary_tolerates_invalid_symptom_items(monkeypatch):
     monkeypatch.setattr(
         "hybrid_demo.edge.summary_agent._slm_summary", fake_slm_summary)
 
-    out = summarise(state)
+    out = await summarise(state)
 
     assert out.chief_complaint == "chest pain"
     assert len(out.symptoms) == 1

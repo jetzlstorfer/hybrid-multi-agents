@@ -16,7 +16,8 @@ def test_get_cloud_credential_prefers_workload_identity(monkeypatch):
         ManagedIdentityCredential=lambda **kwargs: ("managed", kwargs),
         ChainedTokenCredential=lambda *creds: ("chain", creds),
     )
-    monkeypatch.setitem(__import__("sys").modules, "azure.identity", fake_identity)
+    monkeypatch.setitem(__import__("sys").modules,
+                        "azure.identity", fake_identity)
 
     credential = runtime._get_cloud_credential()
     assert credential[0] == "chain"
@@ -40,10 +41,11 @@ def test_get_cloud_chat_client_uses_cluster_credential(monkeypatch):
             endpoint_env=None,
         ),
     )
-    monkeypatch.setattr("hybrid_demo.runtime._get_cloud_credential", lambda: "cred")
+    monkeypatch.setattr(
+        "hybrid_demo.runtime._get_cloud_credential", lambda: "cred")
     monkeypatch.setitem(
         __import__("sys").modules,
-        "agent_framework.foundry",
+        "agent_framework_foundry",
         types.SimpleNamespace(FoundryChatClient=_FakeFoundryChatClient),
     )
 

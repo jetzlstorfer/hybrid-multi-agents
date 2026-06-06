@@ -139,25 +139,18 @@ def _parse_llm_json(raw: str) -> dict:
     raise json.JSONDecodeError("Could not parse JSON object", raw, start)
 
 
-def _complete_chat_raw(client: object, messages: list[dict[str, str]]) -> str:
-    if hasattr(client, "complete_chat"):
-        # Foundry Local ChatClient accepts only messages/tools; openai-compatible
-        # clients additionally support response_format for JSON mode.
-        kwargs: dict = {"messages": messages}
-        if getattr(client, "json_mode_supported", False):
-            kwargs["response_format"] = {"type": "json_object"}
-        response = client.complete_chat(**kwargs)
-    else:
-        response = client.complete(
-            messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.1,
-        )
-    return response.choices[0].message.content or "{}"
+async def _complete_chat_raw(agent: object, user_text: str) -> str:
+    """Run *user_text* through the agent and return the raw text response.
+
+    ``agent`` must be an :class:`agent_framework.Agent` (or any test stub
+    exposing an async ``.run(text)`` returning an object with ``.text``).
+    """
+    response = await agent.run(user_text)  # type: ignore[attr-defined]
+    return getattr(response, "text", None) or "{}"
 
 
-def _complete_chat_json(client: object, messages: list[dict[str, str]]) -> dict:
-    raw = _complete_chat_raw(client, messages)
+async def _complete_chat_json(agent: object, user_text: str) -> dict:
+    raw = await _complete_chat_raw(agent, user_text)
     try:
         return _parse_llm_json(raw)
     except json.JSONDecodeError:
@@ -165,15 +158,18 @@ def _complete_chat_json(client: object, messages: list[dict[str, str]]) -> dict:
         # Attempt a single repair pass; if that also fails, return an empty
         # result so a single bad chunk never kills the whole pipeline.
         try:
-            repair_messages = [
-                {"role": "system", "content": _JSON_REPAIR_PROMPT},
-                {"role": "user", "content": raw},
-            ]
-            repaired = _complete_chat_raw(client, repair_messages)
+            from .. import runtime
+
+            repair_agent = runtime.get_local_agent(
+                "edge.slm",
+                name="EdgePiiJsonRepairAgent",
+                instructions=_JSON_REPAIR_PROMPT,
+                response_format={"type": "json_object"},
+            )
+            repaired = await _complete_chat_raw(repair_agent, raw)
             return _parse_llm_json(repaired)
         except json.JSONDecodeError:
-            import logging
-            logging.getLogger(__name__).warning(
+            _log.warning(
                 "PII agent: could not parse SLM JSON after repair; "
                 "treating chunk as having no entities. Raw response: %r", raw[:200]
             )
@@ -259,18 +255,14 @@ def _is_operation_cancelled_error(exc: Exception) -> bool:
     return "operation was cancelled" in str(exc).lower()
 
 
-def _slm_entities_for_chunk(
-    client: object,
+async def _slm_entities_for_chunk(
+    agent: object,
     chunk: str,
     *,
     min_chunk_chars: int,
 ) -> list[Entity]:
-    messages = [
-        {"role": "system", "content": _PII_SYSTEM_PROMPT},
-        {"role": "user", "content": chunk},
-    ]
     try:
-        parsed = _complete_chat_json(client, messages)
+        parsed = await _complete_chat_json(agent, chunk)
         return _extract_entities(parsed, chunk)
     except Exception as exc:
         # Foundry Local can cancel over-large requests. Retry with smaller
@@ -287,16 +279,16 @@ def _slm_entities_for_chunk(
             out: list[Entity] = []
             if left:
                 out.extend(
-                    _slm_entities_for_chunk(
-                        client,
+                    await _slm_entities_for_chunk(
+                        agent,
                         left,
                         min_chunk_chars=min_chunk_chars,
                     )
                 )
             if right:
                 out.extend(
-                    _slm_entities_for_chunk(
-                        client,
+                    await _slm_entities_for_chunk(
+                        agent,
                         right,
                         min_chunk_chars=min_chunk_chars,
                     )
@@ -310,7 +302,7 @@ def _slm_entities_for_chunk(
         return []
 
 
-def _slm_entities(text: str) -> list[Entity]:
+async def _slm_entities(text: str) -> list[Entity]:
     import os
     from .. import runtime
 
@@ -327,12 +319,17 @@ def _slm_entities(text: str) -> list[Entity]:
         chunk_size = min_chunk_chars
     chunks = _chunk_text(text, chunk_size)
 
-    client = runtime.get_local_chat_client()
+    agent = runtime.get_local_agent(
+        "edge.slm",
+        name="EdgePiiAgent",
+        instructions=_PII_SYSTEM_PROMPT,
+        response_format={"type": "json_object"},
+    )
     all_entities: list[Entity] = []
     for chunk in chunks:
         all_entities.extend(
-            _slm_entities_for_chunk(
-                client,
+            await _slm_entities_for_chunk(
+                agent,
                 chunk,
                 min_chunk_chars=min_chunk_chars,
             )
@@ -370,8 +367,8 @@ def _dedupe(entities: Iterable[Entity]) -> list[Entity]:
     output_classification="sensitivity_report",
     model_role="edge.slm",
 )
-def detect_pii(state: WorkflowState) -> SensitivityReport:
+async def detect_pii(state: WorkflowState) -> SensitivityReport:
     transcript: Transcript = state.transcript  # type: ignore[assignment]
     full_text = "\n".join(seg.text for seg in transcript.segments)
-    merged = _dedupe(_slm_entities(full_text))
+    merged = _dedupe(await _slm_entities(full_text))
     return SensitivityReport(workflow_id=state.workflow_id, entities=merged)
